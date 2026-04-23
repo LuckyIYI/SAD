@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Soft Anisotropic Diagrams for Differentiable Image Representation, ACM SIGGRAPH 2026 Conference Papers.">
+    <title>SAD: Soft Anisotropic Diagrams</title>
+    <link rel="preload" as="image" href="static/images/teaser.webp" fetchpriority="high">
+    <link rel="stylesheet" href="static/style.css">
+  </head>
+  <body>
+    <header class="hero">
+      <div class="container">
+        <p class="eyebrow">SAD</p>
+        <h1>Soft Anisotropic Diagrams for Differentiable Image Representation</h1>
+        <p class="authors">
+          Laki Iinbor<sup>1</sup>,
+          Zhiyang Dou<sup>2,*</sup>,
+          Wojciech Matusik<sup>2,*</sup>
+        </p>
+        <p class="affiliations">
+          <sup>1</sup>Independent Researcher &nbsp; <sup>2</sup>MIT &nbsp; <span>* Joint Last Author</span>
+        </p>
+        <p class="venue">ACM SIGGRAPH 2026 Conference Papers &middot; July 19-23, 2026 &middot; Los Angeles, CA, USA</p>
+        <nav class="links" aria-label="Project links">
+          <a class="link-btn muted" href="#" aria-disabled="true">Paper coming soon</a>
+          <a class="link-btn" href="backends/webgpu_js/train.html">Demo</a>
+          <a class="link-btn" href="https://github.com/LuckyIYI/SAD">Code</a>
+          <a class="link-btn" href="#bibtex">BibTeX</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="teaser-section">
+        <div class="container">
+          <figure>
+            <img class="teaser-img" src="static/images/teaser.webp" alt="SAD teaser comparison" width="1800" height="875" fetchpriority="high" decoding="async">
+          </figure>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="container narrow">
+          <h2>TL;DR</h2>
+          <p>
+            <strong>SAD</strong> represents an image as a soft, anisotropic, differentiable diagram over
+            learnable sites. Each pixel is a softmax blend over its top-K nearby sites under a site-dependent
+            distance, yielding a differentiable partition of unity with explicit ownership and content-aligned
+            boundaries. A GPU-friendly top-K propagation scheme keeps cost constant per pixel, enabling fast
+            fitting at matched or better quality.
+          </p>
+        </div>
+      </section>
+
+      <section class="section alt">
+        <div class="container">
+          <h2>Fitting Process</h2>
+          <p class="section-intro">
+            Each clip is a triple: RGB reconstruction, diagram view, and tau-position heatmap. It shows how
+            sites migrate, temperatures sharpen, and the representation converges to content-aligned regions
+            during optimization.
+          </p>
+
+          <div class="slider" id="video-slider">
+            <button class="slider-arrow prev" type="button" aria-label="Previous">&#8249;</button>
+            <div class="slider-track">
+              <figure class="slider-slide active">
+                <video src="static/videos/fit-1.mp4" autoplay loop muted playsinline preload="metadata"></video>
+              </figure>
+              <figure class="slider-slide">
+                <video src="static/videos/fit-2.mp4" loop muted playsinline preload="metadata"></video>
+              </figure>
+              <figure class="slider-slide">
+                <video src="static/videos/fit-3.mp4" loop muted playsinline preload="metadata"></video>
+              </figure>
+              <figure class="slider-slide">
+                <video src="static/videos/fit-4.mp4" loop muted playsinline preload="metadata"></video>
+              </figure>
+            </div>
+            <button class="slider-arrow next" type="button" aria-label="Next">&#8250;</button>
+            <div class="slider-dots" aria-label="Video slides">
+              <button class="dot active" type="button" data-idx="0" aria-label="Slide 1"></button>
+              <button class="dot" type="button" data-idx="1" aria-label="Slide 2"></button>
+              <button class="dot" type="button" data-idx="2" aria-label="Slide 3"></button>
+              <button class="dot" type="button" data-idx="3" aria-label="Slide 4"></button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="container">
+          <h2>Method</h2>
+          <figure class="wide-fig">
+            <img src="static/images/main_diagram.webp" alt="SAD method diagram" width="1800" height="376" loading="lazy" decoding="async">
+          </figure>
+
+          <div class="method-eqs">
+            <p>
+              We scatter many small sites across the image. Each site has a position, a color, a reach
+              radius, an oriented anisotropic shape, and a temperature that controls boundary sharpness.
+            </p>
+            <div class="equation" aria-label="SAD score equation">
+              score(x, i) = anisotropic_distance(x, p_i) - r_i
+            </div>
+            <p>
+              The pixel color is a soft blend of nearby sites. The temperature tau_i controls how abruptly
+              ownership changes between adjacent sites.
+            </p>
+            <div class="equation" aria-label="SAD color equation">
+              color(x) = sum_i w_i(x) c_i, where w_i(x) is proportional to exp(-tau_i score(x, i))
+            </div>
+            <p>
+              Because each pixel only depends on a fixed-size nearby-site list, both rendering and fitting
+              remain GPU-friendly.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section alt">
+        <div class="container">
+          <h2>Comparisons</h2>
+
+          <div class="bench-slider" id="bench-slider">
+            <div class="bench-tabs" role="tablist" aria-label="Benchmarks">
+              <button class="bench-tab active" type="button" data-idx="0">Image-GS</button>
+              <button class="bench-tab" type="button" data-idx="1">Kodak</button>
+              <button class="bench-tab" type="button" data-idx="2">DIV2K</button>
+              <button class="bench-tab" type="button" data-idx="3">CLIC</button>
+            </div>
+
+            <div class="bench-stage">
+              <button class="slider-arrow prev" type="button" aria-label="Previous benchmark">&#8249;</button>
+              <button class="slider-arrow next" type="button" aria-label="Next benchmark">&#8250;</button>
+
+              <figure class="bench-panel active">
+                <figcaption class="table-caption">
+                  <strong>Reconstruction quality on the Image-GS benchmark.</strong> Average metrics over 45
+                  images at varying bitrates.
+                </figcaption>
+                <div class="table-wrap">
+                  <table class="result-table">
+                    <thead>
+                      <tr><th>Method</th><th>Metric</th><th>0.2 BPP</th><th>0.3 BPP</th><th>0.4 BPP</th><th>0.5 BPP</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr><td rowspan="3">Image-GS</td><td>PSNR up</td><td class="sec">31.32</td><td class="sec">32.79</td><td class="sec">33.80</td><td class="sec">34.57</td></tr>
+                      <tr><td>SSIM up</td><td class="sec">0.8923</td><td class="sec">0.9112</td><td class="sec">0.9228</td><td class="sec">0.9307</td></tr>
+                      <tr><td>LPIPS down</td><td class="sec">0.1309</td><td class="sec">0.1033</td><td class="sec">0.0873</td><td class="sec">0.0769</td></tr>
+                      <tr class="sep"><td rowspan="3">Instant-NGP</td><td>PSNR up</td><td>26.66</td><td>29.41</td><td>29.86</td><td>30.69</td></tr>
+                      <tr><td>SSIM up</td><td>0.7703</td><td>0.8253</td><td>0.8304</td><td>0.8461</td></tr>
+                      <tr><td>LPIPS down</td><td>0.2472</td><td>0.1701</td><td>0.1656</td><td>0.1463</td></tr>
+                      <tr class="sep"><td rowspan="3"><strong>SAD</strong></td><td>PSNR up</td><td class="best">33.87</td><td class="best">35.72</td><td class="best">36.97</td><td class="best">37.86</td></tr>
+                      <tr><td>SSIM up</td><td class="best">0.8983</td><td class="best">0.9202</td><td class="best">0.9334</td><td class="best">0.9422</td></tr>
+                      <tr><td>LPIPS down</td><td class="best">0.0914</td><td class="best">0.0678</td><td class="best">0.0546</td><td class="best">0.0458</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </figure>
+
+              <figure class="bench-panel">
+                <figcaption class="table-caption">
+                  <strong>Image compression on Kodak.</strong> Average reconstruction quality and training
+                  time over 24 images at N = 50,000 primitives.
+                </figcaption>
+                <div class="table-wrap">
+                  <table class="result-table">
+                    <thead>
+                      <tr><th>Method</th><th>PSNR up</th><th>SSIM up</th><th>LPIPS down</th><th>Time (s) down</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr><td>Image-GS</td><td>36.90</td><td class="sec">0.9521</td><td>0.0272</td><td>28</td></tr>
+                      <tr><td>Instant-NGP</td><td>37.72</td><td>0.9494</td><td class="sec">0.0249</td><td>8.2</td></tr>
+                      <tr><td>Fast 2DGS</td><td class="sec">43.13</td><td>-</td><td>-</td><td class="sec">10</td></tr>
+                      <tr class="sep"><td><strong>SAD</strong></td><td class="best">46.00</td><td class="best">0.9871</td><td class="best">0.0032</td><td class="best">2.2</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </figure>
+
+              <figure class="bench-panel">
+                <figcaption class="table-caption">
+                  <strong>Reconstruction quality on DIV2K.</strong> Average metrics over 100 images at varying
+                  bitrates and variable resolution.
+                </figcaption>
+                <div class="table-wrap">
+                  <table class="result-table">
+                    <thead>
+                      <tr><th>Method</th><th>Metric</th><th>0.5 BPP</th><th>2.0 BPP</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr><td rowspan="3">Image-GS</td><td>PSNR up</td><td class="sec">28.48</td><td>32.15</td></tr>
+                      <tr><td>SSIM up</td><td class="sec">0.7914</td><td class="sec">0.8820</td></tr>
+                      <tr><td>LPIPS down</td><td class="sec">0.2515</td><td class="sec">0.1480</td></tr>
+                      <tr class="sep"><td rowspan="3">Instant-NGP</td><td>PSNR up</td><td>26.44</td><td>29.24</td></tr>
+                      <tr><td>SSIM up</td><td>0.7045</td><td>0.7940</td></tr>
+                      <tr><td>LPIPS down</td><td>0.2778</td><td>0.1755</td></tr>
+                      <tr class="sep"><td rowspan="3">VBNF</td><td>PSNR up</td><td>27.13</td><td>31.28</td></tr>
+                      <tr><td>SSIM up</td><td>0.7495</td><td>0.8737</td></tr>
+                      <tr><td>LPIPS down</td><td>0.4321</td><td>0.2765</td></tr>
+                      <tr class="sep"><td>Instant-GI</td><td>PSNR up</td><td>-</td><td class="best">38.01</td></tr>
+                      <tr><td>Fast 2DGS</td><td>PSNR up</td><td>-</td><td class="sec">37.81</td></tr>
+                      <tr class="sep"><td rowspan="3"><strong>SAD</strong></td><td>PSNR up</td><td class="best">30.00</td><td>34.73</td></tr>
+                      <tr><td>SSIM up</td><td class="best">0.7982</td><td class="best">0.9115</td></tr>
+                      <tr><td>LPIPS down</td><td class="best">0.1995</td><td class="best">0.0844</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </figure>
+
+              <figure class="bench-panel">
+                <figcaption class="table-caption">
+                  <strong>Reconstruction quality on CLIC.</strong> Average metrics over 41 images at varying
+                  bitrates.
+                </figcaption>
+                <div class="table-wrap">
+                  <table class="result-table">
+                    <thead>
+                      <tr><th>Method</th><th>Metric</th><th>0.5 BPP</th><th>2.0 BPP</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr><td rowspan="3">Image-GS</td><td>PSNR up</td><td class="sec">30.65</td><td class="sec">34.15</td></tr>
+                      <tr><td>SSIM up</td><td class="best">0.8223</td><td class="sec">0.8907</td></tr>
+                      <tr><td>LPIPS down</td><td class="sec">0.2280</td><td>0.1449</td></tr>
+                      <tr class="sep"><td rowspan="3">Instant-NGP</td><td>PSNR up</td><td>28.59</td><td>32.67</td></tr>
+                      <tr><td>SSIM up</td><td>0.7559</td><td>0.8475</td></tr>
+                      <tr><td>LPIPS down</td><td>0.2351</td><td class="sec">0.1287</td></tr>
+                      <tr class="sep"><td rowspan="3"><strong>SAD</strong></td><td>PSNR up</td><td class="best">31.82</td><td class="best">36.13</td></tr>
+                      <tr><td>SSIM up</td><td class="sec">0.8176</td><td class="best">0.9112</td></tr>
+                      <tr><td>LPIPS down</td><td class="best">0.1870</td><td class="best">0.0884</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </figure>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="bibtex">
+        <div class="container narrow">
+          <h2>BibTeX</h2>
+          <pre class="bibtex">@inproceedings{iinbor2026sad,
+  title   = {Soft Anisotropic Diagrams for Differentiable Image Representation},
+  author  = {Iinbor, Laki and Dou, Zhiyang and Matusik, Wojciech},
+  booktitle = {ACM SIGGRAPH 2026 Conference Papers},
+  year    = {2026},
+  location = {Los Angeles, CA, USA}
+}</pre>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="container">
+        <p>SAD project page.</p>
+        <p class="thanks">
+          Special thanks to the Twitter crew who helped test and explore ideas:
+          <a href="https://x.com/tearsofjake" target="_blank" rel="noopener noreferrer">@tearsofjake</a>,
+          <a href="https://x.com/julienblanchon" target="_blank" rel="noopener noreferrer">@julienblanchon</a>,
+          and <a href="https://x.com/antonobukhov1" target="_blank" rel="noopener noreferrer">@antonobukhov1</a>.
+        </p>
+      </div>
+    </footer>
+
+    <script>
+      (() => {
+        const playbackRate = 1.5;
+        const slider = document.getElementById("video-slider");
+        const slides = [...slider.querySelectorAll(".slider-slide")];
+        const dots = [...slider.querySelectorAll(".dot")];
+        let idx = 0;
+
+        const setSlide = (nextIdx) => {
+          idx = (nextIdx + slides.length) % slides.length;
+          slides.forEach((slide, n) => {
+            const video = slide.querySelector("video");
+            const active = n === idx;
+            slide.classList.toggle("active", active);
+            dots[n].classList.toggle("active", active);
+            if (active) {
+              video.currentTime = 0;
+              video.playbackRate = playbackRate;
+              video.play().catch(() => {});
+            } else {
+              video.pause();
+            }
+          });
+        };
+
+        slider.querySelectorAll("video").forEach((video) => {
+          video.addEventListener("loadedmetadata", () => { video.playbackRate = playbackRate; });
+        });
+        slider.querySelector(".prev").addEventListener("click", () => setSlide(idx - 1));
+        slider.querySelector(".next").addEventListener("click", () => setSlide(idx + 1));
+        dots.forEach((dot) => dot.addEventListener("click", () => setSlide(Number(dot.dataset.idx))));
+
+        const bench = document.getElementById("bench-slider");
+        const tabs = [...bench.querySelectorAll(".bench-tab")];
+        const panels = [...bench.querySelectorAll(".bench-panel")];
+        let benchIdx = 0;
+        const setBench = (nextIdx) => {
+          benchIdx = (nextIdx + panels.length) % panels.length;
+          tabs.forEach((tab, n) => tab.classList.toggle("active", n === benchIdx));
+          panels.forEach((panel, n) => panel.classList.toggle("active", n === benchIdx));
+        };
+        bench.querySelector(".prev").addEventListener("click", () => setBench(benchIdx - 1));
+        bench.querySelector(".next").addEventListener("click", () => setBench(benchIdx + 1));
+        tabs.forEach((tab) => tab.addEventListener("click", () => setBench(Number(tab.dataset.idx))));
+      })();
+    </script>
+  </body>
+</html>

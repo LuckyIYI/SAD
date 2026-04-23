@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Metal-generated intermediates
+*.air
+*.metallib
+
+# Build artifacts
+/build/
+/backends/cuda/build/
+/backends/cuda/bin/
+/backends/pytorch/torch_ext/build/
+/backends/pytorch/torch_ext/sad_ops.egg-info/
+/backends/pytorch/torch_ext/sad_ops/*.so
+
+# Training outputs and local data
+/results/

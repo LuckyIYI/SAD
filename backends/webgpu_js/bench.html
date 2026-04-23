@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SAD WebGPU JS Benchmark</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color: #111;
+        background: #fafafa;
+      }
+      h1 { margin: 0 0 16px; font-size: 18px; }
+      pre {
+        overflow-x: auto;
+        padding: 16px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        background: #fff;
+        white-space: pre-wrap;
+      }
+      .ok { color: #075f2d; }
+      .fail { color: #8b0000; }
+    </style>
+  </head>
+  <body>
+    <h1>SAD WebGPU JS Benchmark</h1>
+    <pre id="log">Starting...</pre>
+    <pre id="summary"></pre>
+
+    <script type="module">
+      import { loadShaders } from "./src/shader_loader.js";
+      import { Trainer, buildArgs } from "./src/trainer.js";
+      import { loadImageToFloat32 } from "./src/textures.js";
+
+      const logEl = document.getElementById("log");
+      const summaryEl = document.getElementById("summary");
+      const params = new URLSearchParams(location.search);
+      const imageUrl = params.get("image") || "../../test.png";
+      const configUrl = params.get("config") || "../../training_config.json";
+
+      function log(line) {
+        logEl.textContent += `${line}\n`;
+        console.log(line);
+      }
+
+      function numberParam(name, fallback = undefined) {
+        const raw = params.get(name);
+        if (raw === null || raw === "") return fallback;
+        const value = Number(raw);
+        return Number.isFinite(value) ? value : fallback;
+      }
+
+      function boolParam(name, fallback = undefined) {
+        const raw = params.get(name);
+        if (raw === null || raw === "") return fallback;
+        const normalized = raw.toLowerCase();
+        if (normalized === "1" || normalized === "true") return true;
+        if (normalized === "0" || normalized === "false") return false;
+        return fallback;
+      }
+
+      function computePsnr(render, target, width, height) {
+        let acc = 0;
+        const n = width * height;
+        for (let i = 0; i < n; i += 1) {
+          for (let c = 0; c < 3; c += 1) {
+            const r = Number.isFinite(render[i * 4 + c]) ? render[i * 4 + c] : 0;
+            const d = r - target[i * 4 + c];
+            acc += d * d;
+          }
+        }
+        const mse = acc / Math.max(1, n * 3);
+        return mse <= 0 ? 100.0 : 20.0 * Math.log10(1.0 / Math.sqrt(mse));
+      }
+
+      async function initDevice() {
+        if (!navigator.gpu) throw new Error("WebGPU not available in this browser.");
+        const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+        if (!adapter) throw new Error("No WebGPU adapter found.");
+        const requiredLimits = {
+          maxStorageBuffersPerShaderStage: Math.min(
+            Math.max(12, adapter.limits.maxStorageBuffersPerShaderStage || 8),
+            adapter.limits.maxStorageBuffersPerShaderStage,
+          ),
+          maxBufferSize: Math.min(1 << 30, adapter.limits.maxBufferSize),
+          maxStorageBufferBindingSize: Math.min(1 << 30, adapter.limits.maxStorageBufferBindingSize),
+        };
+        const device = await adapter.requestDevice({ requiredLimits });
+        return { adapter, device };
+      }
+
+      async function run() {
+        logEl.textContent = "";
+        const startedAt = performance.now();
+        const config = await fetch(configUrl, { cache: "no-cache" }).then((r) => {
+          if (!r.ok) throw new Error(`Failed to load config: ${r.status}`);
+          return r.json();
+        });
+        const overrides = {
+          iters: numberParam("iters"),
+          sites: numberParam("sites"),
+          maxSites: numberParam("maxSites"),
+          targetBpp: numberParam("targetBpp"),
+          logFreq: numberParam("logFreq"),
+          viewerFreq: numberParam("viewerFreq"),
+          densify: boolParam("densify"),
+          prunePercentile: numberParam("prunePercentile"),
+          candUpdatePasses: numberParam("candPasses"),
+        };
+        for (const key of Object.keys(overrides)) {
+          if (overrides[key] === undefined) delete overrides[key];
+        }
+        const args = buildArgs(config, overrides);
+        log(`Config | target-bpp=${args.targetBpp.toFixed(3)} | iters=${args.iters} | sites=${args.sites}/${args.maxSites} | log-freq=${args.logFreq} | viewer-freq=${args.viewerFreq}`);
+
+        const imageBlob = await fetch(imageUrl, { cache: "no-cache" }).then((r) => {
+          if (!r.ok) throw new Error(`Failed to load image: ${r.status}`);
+          return r.blob();
+        });
+        const imageFile = new File([imageBlob], imageUrl.split("/").pop() || "target.png", { type: imageBlob.type || "image/png" });
+        const target = await loadImageToFloat32(imageFile, Number(config.MAX_DIM || 0));
+        log(`Image | ${target.width}x${target.height}`);
+
+        const { adapter, device } = await initDevice();
+        log(`Device | ${adapter.info?.device || adapter.info?.description || adapter.info?.vendor || "unknown"}`);
+
+        const shaders = await loadShaders();
+        const trainer = new Trainer(device, shaders, args, {
+          onLog: (info) => {
+            if (info.type === "msg") {
+              log(info.message);
+            } else if (info.type === "iter") {
+              log(
+                `Iter ${String(info.it).padStart(4)} | PSNR: ${info.psnr.toFixed(2)} dB | ` +
+                `Active: ${info.activeSites}/${info.totalSites} | ${info.itsPerSec.toFixed(1)} it/s | ${info.elapsedSec.toFixed(1)}s`,
+              );
+              window.__lastIter = info;
+            }
+          },
+        });
+
+        await trainer.prepare({
+          width: target.width,
+          height: target.height,
+          targetRgba32f: target.data,
+          maskRgba32f: null,
+          maskSum: target.width * target.height,
+          initSites: null,
+          initSiteCount: args.sites,
+        });
+
+        const trainStart = performance.now();
+        await trainer.run();
+        const trainSeconds = (performance.now() - trainStart) / 1000;
+        const final = await trainer.finalize();
+        const totalSeconds = (performance.now() - startedAt) / 1000;
+        const finalPsnr = computePsnr(final.renderRgba, target.data, target.width, target.height);
+        const activeSites = window.__lastIter?.activeSites ?? null;
+        const speed = args.iters / Math.max(trainSeconds, 1e-6);
+
+        const summary = {
+          backend: "webgpu_js",
+          image: `${target.width}x${target.height}`,
+          targetBpp: args.targetBpp,
+          iters: args.iters,
+          logFreq: args.logFreq,
+          viewerFreq: args.viewerFreq,
+          activeSites,
+          totalSites: final.count,
+          finalPsnr,
+          bestPsnr: final.bestPsnr,
+          trainSeconds,
+          totalSeconds,
+          itPerSecond: speed,
+        };
+        summaryEl.className = "ok";
+        summaryEl.textContent = JSON.stringify(summary, null, 2);
+        console.log(`BENCH_RESULT ${JSON.stringify(summary)}`);
+        document.title = `DONE ${finalPsnr.toFixed(2)} dB`;
+      }
+
+      run().catch((err) => {
+        summaryEl.className = "fail";
+        summaryEl.textContent = err.stack || String(err);
+        console.error(err);
+        document.title = "FAILED";
+      });
+    </script>
+  </body>
+</html>

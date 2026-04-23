@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>SAD Sites Viewer (WebGPU)</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="toolbar">
+      <div class="title">SAD Sites Viewer</div>
+      <div class="controls">
+        <label class="file">
+          <input id="fileInput" type="file" accept=".txt" />
+          <span>Choose .txt</span>
+        </label>
+        <label class="file">
+          <input id="fileInputB" type="file" accept=".txt" />
+          <span>Choose B .txt</span>
+        </label>
+        <label>
+          <span>Render Mode:</span>
+          <select id="renderModeSelect">
+            <option value="0">Color</option>
+            <option value="1">IDs</option>
+            <option value="2">Tau</option>
+            <option value="3">Anisotropy</option>
+            <option value="4">Radius</option>
+          </select>
+        </label>
+        <label class="interp">
+          <span>Interp:</span>
+          <input id="interpSlider" type="range" min="0" max="1" step="0.01" value="0" />
+          <span id="interpValue">0.00</span>
+        </label>
+        <label class="toggle">
+          <input id="dotsToggle" type="checkbox" />
+          Dots
+        </label>
+        <button id="fitBtn", hidden=true>Fit</button>
+        <button id="resetBtn" hidden=true>Reset</button>
+        <button id="exportBtn" hidden=true>Export PNG</button>
+      </div>
+      <div class="status" id="status">No file loaded.</div>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="gpuCanvas"></canvas>
+      <canvas id="overlayCanvas"></canvas>
+      <button id="deleteBtn" class="delete-btn hidden">Delete Selected Sites</button>
+      <div id="fallback" class="fallback hidden">
+        WebGPU is not available in this browser.
+      </div>
+    </div>
+    <script src="shaders.js"></script>
+    <script src="main.js"></script>
+  </body>
+</html>
