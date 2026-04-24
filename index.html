@@ -7,6 +7,13 @@
     <title>SAD: Soft Anisotropic Diagrams</title>
     <link rel="preload" as="image" href="static/images/teaser.webp" fetchpriority="high">
     <link rel="stylesheet" href="static/style.css">
+    <script>
+      window.MathJax = {
+        tex: { inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]] },
+        svg: { fontCache: "global" },
+      };
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
   </head>
   <body>
     <header class="hero">
@@ -102,14 +109,27 @@
               radius, an oriented anisotropic shape, and a temperature that controls boundary sharpness.
             </p>
             <div class="equation" aria-label="SAD score equation">
-              score(x, i) = anisotropic_distance(x, p_i) - r_i
+              \[
+                s_i(\mathbf{x}) =
+                d_{\mathbf{A}_i}\!\left(\mathbf{x}, \mathbf{p}_i\right) - r_i
+              \]
             </div>
             <p>
-              The pixel color is a soft blend of nearby sites. The temperature tau_i controls how abruptly
-              ownership changes between adjacent sites.
+              The pixel color is a soft blend of nearby sites. The temperature \(\tau_i\) controls how
+              abruptly ownership changes between adjacent sites.
             </p>
             <div class="equation" aria-label="SAD color equation">
-              color(x) = sum_i w_i(x) c_i, where w_i(x) is proportional to exp(-tau_i score(x, i))
+              \[
+                \hat{\mathbf{c}}(\mathbf{x}) =
+                \sum_{i \in \mathcal{N}_K(\mathbf{x})}
+                w_i(\mathbf{x})\,\mathbf{c}_i
+              \]
+              \[
+                w_i(\mathbf{x}) =
+                \frac{\exp\!\left(-\tau_i s_i(\mathbf{x})\right)}
+                {\sum_{j \in \mathcal{N}_K(\mathbf{x})}
+                \exp\!\left(-\tau_j s_j(\mathbf{x})\right)}
+              \]
             </div>
             <p>
               Because each pixel only depends on a fixed-size nearby-site list, both rendering and fitting

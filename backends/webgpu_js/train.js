@@ -3,11 +3,11 @@
 // (mask, init-sites, densify/prune/lr…) in the collapsible left panel, and a
 // side-by-side target vs reconstruction view, both aspect-fit.
 
-import { loadShaders } from "./src/shader_loader.js?v=viewer-sync-20260423h";
-import { Trainer, buildArgs } from "./src/trainer.js?v=viewer-sync-20260423h";
-import { loadImageToFloat32, loadMaskRgba32Float, whiteMaskRgba32Float } from "./src/textures.js?v=viewer-sync-20260423h";
-import { loadSitesFromFile, serializeSitesTxt, triggerDownload, floatImageToRgba8 } from "./src/io.js?v=viewer-sync-20260423h";
-import { SITE_FLOATS } from "./src/params.js?v=viewer-sync-20260423h";
+import { loadShaders } from "./src/shader_loader.js?v=viewer-sync-20260423i";
+import { Trainer, buildArgs } from "./src/trainer.js?v=viewer-sync-20260423i";
+import { loadImageToFloat32, loadMaskRgba32Float, whiteMaskRgba32Float } from "./src/textures.js?v=viewer-sync-20260423i";
+import { loadSitesFromFile, serializeSitesTxt, triggerDownload, floatImageToRgba8 } from "./src/io.js?v=viewer-sync-20260423i";
+import { SITE_FLOATS } from "./src/params.js?v=viewer-sync-20260423i";
 
 const CONFIG_URL = "../../training_config.json";
 const DEMO_MAX_IMAGE_SIDE = 2048;
@@ -186,17 +186,33 @@ function drawToCanvas(canvas, rgbaF, width, height) {
     canvas.width = width;
     canvas.height = height;
   }
+  fitCanvasToCard(canvas, width, height);
   const ctx = canvas.getContext("2d");
   ctx.putImageData(new ImageData(floatImageToRgba8(rgbaF, width, height), width, height), 0, 0);
 }
 
-function updateCanvasLayout() {
+function fitCanvasToCard(canvas, width = canvas.width, height = canvas.height) {
+  if (!canvas || !width || !height) return;
+  const card = canvas.parentElement;
+  if (!card) return;
+  const rect = card.getBoundingClientRect();
+  const cardWidth = card.clientWidth || rect.width;
+  const cardHeight = card.clientHeight || rect.height;
+  if (cardWidth <= 0 || cardHeight <= 0) return;
+  const scale = Math.min(cardWidth / width, cardHeight / height);
+  canvas.style.width = `${Math.max(1, width * scale)}px`;
+  canvas.style.height = `${Math.max(1, height * scale)}px`;
+}
+
+function updateCanvasLayout(width = state.targetImage?.width, height = state.targetImage?.height) {
   const cards = [ui.targetCanvas.parentElement, ui.previewCanvas.parentElement];
   for (const card of cards) {
     card.style.removeProperty("aspect-ratio");
     card.style.removeProperty("width");
     card.style.removeProperty("height");
   }
+  fitCanvasToCard(ui.targetCanvas, width || ui.targetCanvas.width, height || ui.targetCanvas.height);
+  fitCanvasToCard(ui.previewCanvas, width || ui.previewCanvas.width, height || ui.previewCanvas.height);
   positionOverlay();
 }
 
@@ -227,6 +243,7 @@ async function handleImageInput(ev) {
     ctx.fillRect(0, 0, img.width, img.height);
     ui.overlayCanvas.width = img.width;
     ui.overlayCanvas.height = img.height;
+    fitCanvasToCard(ui.previewCanvas, img.width, img.height);
     updateCanvasLayout(img.width, img.height);
     setStatus(scaled
       ? `Target ${img.width}×${img.height} (downscaled from ${img.sourceWidth}×${img.sourceHeight})`

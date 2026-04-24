@@ -305,17 +305,17 @@ figure {
 
 .equation {
   overflow-x: auto;
-  margin: 14px 0 20px;
-  padding: 16px 18px;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: 4px;
-  background: #fff;
+  margin: 10px 0 22px;
+  padding: 6px 0;
   color: var(--fg);
-  font-family: var(--mono);
-  font-size: 0.93rem;
-  line-height: 1.6;
-  white-space: nowrap;
+  font-family: var(--serif);
+  font-size: 1.02rem;
+  line-height: 1.5;
+}
+
+.equation mjx-container[display="true"] {
+  margin: 0.25em 0;
+  min-width: max-content;
 }
 
 .bench-slider {
