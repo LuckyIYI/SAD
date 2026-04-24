@@ -28,7 +28,7 @@ Both pages use the shared SAD WGSL kernels under `backends/shared/` and hyperpar
 
 - Pick a target image (and optional mask / init-sites file).
 - Edit hyperparameters in the left panel (they mirror the CLI flags in `train_wgpu.py`; values are pre-filled from `training_config.json`).
-- Click **Train**. The preview canvas updates on every `log-freq` iteration and logs `Iter N | PSNR: X dB | Active: a/t | it/s | seconds` just like the Python trainer.
+- Click **Train**. `viewer-freq` controls visual refreshes, while `log-freq` controls PSNR log lines (`Iter N | PSNR: X dB | Active: a/t | it/s | seconds`).
 - **Export PNG** / **Export sites.txt** produce the same formats the Python and Metal trainers write.
 
 ## Benchmark (`bench.html`)

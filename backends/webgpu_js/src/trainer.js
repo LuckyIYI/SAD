@@ -84,6 +84,9 @@ import {
 
 import { RadixSortUInt2 } from "./radix_sort.js";
 
+const MAX_PREVIEW_IMAGE_READBACKS = 2;
+const MAX_PREVIEW_SITE_READBACKS = 8;
+
 // Small "simulate final site count" helper — matches simulate_final_sites().
 function simulateFinalSites(initSites, maxSites, iters, densifyEnabled, densifyStart,
                             densifyEnd, densifyFreq, densifyPercentile, pruneDuringDensify,
@@ -287,6 +290,8 @@ export class Trainer {
     this.signal = signal;
 
     this.usesHilbert = args.candHilbertWindow > 0 && args.candHilbertProbes > 0;
+    this._previewImageInFlight = 0;
+    this._previewSiteInFlight = 0;
 
     // Encoders
     this.initEnc = new InitGradientEncoder(device, shaders);
@@ -724,14 +729,16 @@ export class Trainer {
         }
       }
 
-      // Preview/log renders. The log path needs a synchronous readback so we
-      // can compute PSNR and append the log line before the next iter. The
-      // preview path (much more frequent) fires a readback asynchronously —
-      // `mapAsync` resolves on a later microtask without blocking the training
-      // loop. Only one in-flight preview readback at a time.
+      // Preview/log renders. The log path does a blocking readback for PSNR.
+      // Viewer ticks wait only for the small site readback so centroid overlays
+      // stay on the requested cadence; full image readback stays asynchronous.
+      let previewReadback = null;
       if (shouldPreview) {
         this.renderEnc.encode(encoder, this.sitesBuf, this.renderParams,
           this.cand0A, this.cand1A, this.renderTex, this.width, this.height);
+        if (!shouldLog) {
+          previewReadback = this._encodePreviewReadback(encoder, it, iters, postActive, postSites);
+        }
       }
       queue.submit([encoder.finish()]);
 
@@ -760,7 +767,9 @@ export class Trainer {
         }
         await yieldToBrowser();
       } else if (shouldPreview) {
-        this._schedulePreviewReadback(it, iters, postActive, postSites);
+        const previewDone = previewReadback ? this._finishPreviewReadback(previewReadback) : null;
+        if (previewDone?.site) await previewDone.site;
+        await yieldToBrowser();
       } else if (((it + 1) & 0x1f) === 0) {
         await yieldToBrowser();
       }
@@ -810,71 +819,129 @@ export class Trainer {
     device.queue.submit([encoder.finish()]);
   }
 
-  // Fire a non-blocking readback of the render texture for the preview canvas.
-  // Only one readback in flight at a time; subsequent viewer-freq ticks skip
-  // the copy if the previous one hasn't resolved yet. This keeps the training
-  // loop off the GPU sync critical path (mapAsync would otherwise force a full
-  // queue flush every viewer-freq iters, costing ~4× throughput at 2K res).
-  _schedulePreviewReadback(it, iters, postActive, postSites) {
-    if (this._previewBusy) return;
-    this._previewBusy = true;
+  // Encode preview readbacks into the same submission as the preview render.
+  // Site readbacks are separated from image readbacks so centroid overlays can
+  // be awaited cheaply while full-image readback continues in the background.
+  _encodePreviewReadback(encoder, it, iters, postActive, postSites) {
     const device = this.device;
     const width = this.width;
     const height = this.height;
     const bytesPerPixel = 16;
     const bytesPerRow = width * bytesPerPixel;
     const aligned = Math.floor((bytesPerRow + 255) / 256) * 256;
-    const size = aligned * height;
+    const imageBytes = aligned * height;
+    const siteBytes = postSites * SITE_FLOATS * 4;
+    const meta = {
+      it,
+      iters,
+      postActive,
+      postSites,
+      width,
+      height,
+      bytesPerRow,
+      aligned,
+      startMs: this.trainStartMs,
+    };
 
-    // Reuse a staging buffer across preview ticks.
-    if (!this._previewStaging || this._previewStagingSize !== size) {
-      if (this._previewStaging) this._previewStaging.destroy();
-      this._previewStaging = device.createBuffer({
-        size,
+    let imageReq = null;
+    let siteReq = null;
+
+    if (this._previewSiteInFlight < MAX_PREVIEW_SITE_READBACKS) {
+      this._previewSiteInFlight += 1;
+      const siteStaging = device.createBuffer({
+        size: siteBytes,
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
       });
-      this._previewStagingSize = size;
+      encoder.copyBufferToBuffer(this.sitesBuf, 0, siteStaging, 0, siteBytes);
+      siteReq = { ...meta, siteStaging };
     }
-    const staging = this._previewStaging;
 
-    const enc = device.createCommandEncoder();
-    enc.copyTextureToBuffer(
-      { texture: this.renderTex },
-      { buffer: staging, bytesPerRow: aligned, rowsPerImage: height },
-      [width, height, 1],
-    );
-    device.queue.submit([enc.finish()]);
+    if (this._previewImageInFlight < MAX_PREVIEW_IMAGE_READBACKS) {
+      this._previewImageInFlight += 1;
+      const imageStaging = device.createBuffer({
+        size: imageBytes,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+      encoder.copyTextureToBuffer(
+        { texture: this.renderTex },
+        { buffer: imageStaging, bytesPerRow: aligned, rowsPerImage: height },
+        [width, height, 1],
+      );
+      imageReq = { ...meta, imageStaging };
+    }
 
-    const startMs = this.trainStartMs;
-    const totalIters = iters;
-    staging.mapAsync(GPUMapMode.READ).then(() => {
-      const mapped = new Uint8Array(staging.getMappedRange());
-      const rgba = new Float32Array(width * height * 4);
-      for (let y = 0; y < height; y += 1) {
-        const row = mapped.subarray(y * aligned, y * aligned + bytesPerRow);
-        rgba.set(new Float32Array(row.buffer, row.byteOffset, width * 4), y * width * 4);
-      }
-      staging.unmap();
+    return imageReq || siteReq ? { imageReq, siteReq } : null;
+  }
+
+  _finishPreviewReadback(req) {
+    const site = req.siteReq ? this._finishPreviewSiteReadback(req.siteReq) : null;
+    const image = req.imageReq ? this._finishPreviewImageReadback(req.imageReq) : null;
+    return { site, image };
+  }
+
+  _finishPreviewSiteReadback(req) {
+    return req.siteStaging.mapAsync(GPUMapMode.READ).then(async () => {
+      const sitesData = new Float32Array(req.siteStaging.getMappedRange()).slice();
+      req.siteStaging.unmap();
+      req.siteStaging.destroy();
+      this._lastSitesCpu = sitesData;
       this._lastHashedRgba = null;
       this._lastHeatmapRgba = null;
       if (this.onLog) {
-        const elapsed = (performance.now() - startMs) / 1000;
-        const itsPerSec = (it + 1) / Math.max(elapsed, 1e-6);
+        const elapsed = (performance.now() - req.startMs) / 1000;
+        const itsPerSec = (req.it + 1) / Math.max(elapsed, 1e-6);
+        await this.onLog({
+          type: "sites",
+          it: req.it,
+          iters: req.iters,
+          activeSites: req.postActive,
+          totalSites: req.postSites,
+          itsPerSec,
+          elapsedSec: elapsed,
+          sitesData,
+          width: req.width,
+          height: req.height,
+        });
+      }
+      this._previewSiteInFlight -= 1;
+    }).catch((err) => {
+      req.siteStaging.destroy();
+      this._previewSiteInFlight -= 1;
+      console.warn("Preview site readback failed", err);
+    });
+  }
+
+  _finishPreviewImageReadback(req) {
+    req.imageStaging.mapAsync(GPUMapMode.READ).then(() => {
+      const mapped = new Uint8Array(req.imageStaging.getMappedRange());
+      const rgba = new Float32Array(req.width * req.height * 4);
+      for (let y = 0; y < req.height; y += 1) {
+        const row = mapped.subarray(y * req.aligned, y * req.aligned + req.bytesPerRow);
+        rgba.set(new Float32Array(row.buffer, row.byteOffset, req.width * 4), y * req.width * 4);
+      }
+      req.imageStaging.unmap();
+      req.imageStaging.destroy();
+      if (this.onLog) {
+        const elapsed = (performance.now() - req.startMs) / 1000;
+        const itsPerSec = (req.it + 1) / Math.max(elapsed, 1e-6);
         this.onLog({
           type: "preview",
-          it, iters: totalIters,
-          activeSites: postActive,
-          totalSites: postSites,
+          it: req.it,
+          iters: req.iters,
+          activeSites: req.postActive,
+          totalSites: req.postSites,
           itsPerSec,
           elapsedSec: elapsed,
           renderRgba: rgba,
-          width, height,
+          width: req.width,
+          height: req.height,
         });
       }
-      this._previewBusy = false;
+      this._previewImageInFlight -= 1;
     }).catch((err) => {
-      this._previewBusy = false;
-      console.warn("Preview readback failed", err);
+      req.imageStaging.destroy();
+      this._previewImageInFlight -= 1;
+      console.warn("Preview image readback failed", err);
     });
   }
 

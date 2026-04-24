@@ -3,14 +3,15 @@
 // (mask, init-sites, densify/prune/lr…) in the collapsible left panel, and a
 // side-by-side target vs reconstruction view, both aspect-fit.
 
-import { loadShaders } from "./src/shader_loader.js";
-import { Trainer, buildArgs } from "./src/trainer.js";
-import { loadImageToFloat32, loadMaskRgba32Float, whiteMaskRgba32Float } from "./src/textures.js";
-import { loadSitesFromFile, serializeSitesTxt, triggerDownload, floatImageToRgba8 } from "./src/io.js";
-import { SITE_FLOATS } from "./src/params.js";
+import { loadShaders } from "./src/shader_loader.js?v=viewer-sync-20260423h";
+import { Trainer, buildArgs } from "./src/trainer.js?v=viewer-sync-20260423h";
+import { loadImageToFloat32, loadMaskRgba32Float, whiteMaskRgba32Float } from "./src/textures.js?v=viewer-sync-20260423h";
+import { loadSitesFromFile, serializeSitesTxt, triggerDownload, floatImageToRgba8 } from "./src/io.js?v=viewer-sync-20260423h";
+import { SITE_FLOATS } from "./src/params.js?v=viewer-sync-20260423h";
 
 const CONFIG_URL = "../../training_config.json";
 const DEMO_MAX_IMAGE_SIDE = 2048;
+const DEMO_VIEWER_FREQ = 250;
 const MIN_TARGET_BPP = 0.2;
 const MAX_TARGET_BPP = 16.0;
 
@@ -126,6 +127,7 @@ function applyConfigToForm(config) {
     else if (v === undefined) el.value = "";
     else el.value = v;
   }
+  document.getElementById("p-viewerFreq").value = DEMO_VIEWER_FREQ;
   if (Number.isFinite(defaults.targetBpp) && defaults.targetBpp > 0) {
     setTargetBpp(defaults.targetBpp);
   } else {
@@ -145,7 +147,11 @@ function readFormArgs() {
   const bpp = Number(ui.bppInput.value);
   const targetBpp = setTargetBpp(bpp);
   overrides.targetBpp = targetBpp;
-  overrides.logFreq = Math.max(1, Number(overrides.logFreq || 100));
+  if (overrides.viewerFreq === undefined || !Number.isFinite(overrides.viewerFreq)) {
+    overrides.viewerFreq = DEMO_VIEWER_FREQ;
+  } else {
+    overrides.viewerFreq = Math.max(1, overrides.viewerFreq);
+  }
   return buildArgs(state.config, overrides);
 }
 
@@ -184,9 +190,20 @@ function drawToCanvas(canvas, rgbaF, width, height) {
   ctx.putImageData(new ImageData(floatImageToRgba8(rgbaF, width, height), width, height), 0, 0);
 }
 
+function updateCanvasLayout() {
+  const cards = [ui.targetCanvas.parentElement, ui.previewCanvas.parentElement];
+  for (const card of cards) {
+    card.style.removeProperty("aspect-ratio");
+    card.style.removeProperty("width");
+    card.style.removeProperty("height");
+  }
+  positionOverlay();
+}
+
 function drawTarget() {
   if (!state.targetImage) return;
   const { data, width, height } = state.targetImage;
+  updateCanvasLayout(width, height);
   drawToCanvas(ui.targetCanvas, data, width, height);
 }
 
@@ -210,6 +227,7 @@ async function handleImageInput(ev) {
     ctx.fillRect(0, 0, img.width, img.height);
     ui.overlayCanvas.width = img.width;
     ui.overlayCanvas.height = img.height;
+    updateCanvasLayout(img.width, img.height);
     setStatus(scaled
       ? `Target ${img.width}×${img.height} (downscaled from ${img.sourceWidth}×${img.sourceHeight})`
       : `Target ${img.width}×${img.height}`);
@@ -300,7 +318,7 @@ async function startTraining() {
   if (init) init = overrideInitLogTau(init, args.initLogTau);
   const initSiteCount = init ? init.count : args.sites;
 
-  appendLog(`Target: ${width}×${height} | sites: ${initSiteCount} | iters: ${args.iters} | bpp: ${args.targetBpp > 0 ? args.targetBpp : "off"}`);
+  appendLog(`Target: ${width}×${height} | sites: ${initSiteCount} | iters: ${args.iters} | bpp: ${args.targetBpp > 0 ? args.targetBpp : "off"} | log: ${args.logFreq} | view: ${args.viewerFreq}`);
   updateProgress(0, args.iters, "Preparing…");
 
   const trainer = new Trainer(state.device, state.shaders, args, {
@@ -319,21 +337,32 @@ async function startTraining() {
         state.lastHashed = null;
         state.lastHeatmap = null;
         updateProgress(info.it + 1, info.iters,
-          `iter ${info.it + 1}/${info.iters} · ${info.itsPerSec.toFixed(1)} it/s · ${info.elapsedSec.toFixed(1)}s`);
+          `log iter ${info.it + 1}/${info.iters} · ${info.itsPerSec.toFixed(1)} it/s · ${info.elapsedSec.toFixed(1)}s`);
         renderMetrics(info);
         await drawView();
       } else if (info.type === "preview") {
-        // Viewer-frequency update: refresh the canvas and metrics but don't
-        // touch the log. Only the render texture was read — site data is
-        // stale, so centroids/diagram/heatmap views wait for the next log.
+        // Full image preview. Site overlays arrive through a separate lighter
+        // event so they are not blocked by full-image readback.
         state.lastRender = { rgba: info.renderRgba, width: info.width, height: info.height };
-        updateProgress(info.it + 1, info.iters,
-          `iter ${info.it + 1}/${info.iters} · ${info.itsPerSec.toFixed(1)} it/s · ${info.elapsedSec.toFixed(1)}s`);
-        renderMetrics(info);
-        const mode = ui.viewMode.value;
-        if (mode === "render" || mode === "centroids") {
-          await drawView();
+        if (info.sitesData) {
+          state.lastSites = info.sitesData;
+          state.lastSiteCount = info.totalSites;
         }
+        state.lastHashed = null;
+        state.lastHeatmap = null;
+        updateProgress(info.it + 1, info.iters,
+          `image iter ${info.it + 1}/${info.iters} · ${info.itsPerSec.toFixed(1)} it/s · ${info.elapsedSec.toFixed(1)}s`);
+        renderMetrics(info);
+        await drawView();
+      } else if (info.type === "sites") {
+        state.lastSites = info.sitesData;
+        state.lastSiteCount = info.totalSites;
+        state.lastHashed = null;
+        state.lastHeatmap = null;
+        updateProgress(info.it + 1, info.iters,
+          `sites iter ${info.it + 1}/${info.iters} · ${info.itsPerSec.toFixed(1)} it/s · ${info.elapsedSec.toFixed(1)}s`);
+        renderMetrics(info);
+        drawCentroidOverlay();
       }
     },
   });
@@ -391,7 +420,6 @@ function updateProgress(cur, total, text) {
 function clearOverlay() {
   const ctx = ui.overlayCanvas.getContext("2d");
   ctx.clearRect(0, 0, ui.overlayCanvas.width, ui.overlayCanvas.height);
-  positionOverlay();
 }
 
 // The overlay canvas sits inside the same card as the preview but is absolutely
@@ -407,11 +435,27 @@ function positionOverlay() {
   ui.overlayCanvas.style.height = `${prect.height}px`;
 }
 
+function prepareOverlay(width, height) {
+  if (ui.overlayCanvas.width !== width || ui.overlayCanvas.height !== height) {
+    ui.overlayCanvas.width = width;
+    ui.overlayCanvas.height = height;
+  }
+  positionOverlay();
+  clearOverlay();
+  return ui.overlayCanvas.getContext("2d");
+}
+
+function drawCentroidOverlay() {
+  if (ui.viewMode.value !== "centroids") return;
+  if (!state.lastRender || !state.lastSites) return;
+  const ctx = prepareOverlay(state.lastRender.width, state.lastRender.height);
+  drawCentroids(ctx);
+}
+
 async function drawView() {
   if (!state.lastRender) return;
   const mode = ui.viewMode.value;
   const { rgba, width, height } = state.lastRender;
-  clearOverlay();
   ui.previewLabel.textContent = {
     render: "Reconstruction",
     centroids: "Reconstruction + centroids",
@@ -422,12 +466,12 @@ async function drawView() {
   if (mode === "render") {
     drawToCanvas(ui.previewCanvas, rgba, width, height);
     positionOverlay();
+    clearOverlay();
     return;
   }
   if (mode === "centroids") {
     drawToCanvas(ui.previewCanvas, rgba, width, height);
-    positionOverlay();
-    drawCentroids();
+    drawCentroidOverlay();
     return;
   }
   if (mode === "diagram") {
@@ -435,6 +479,7 @@ async function drawView() {
     if (img) {
       drawToCanvas(ui.previewCanvas, img.rgba, img.width, img.height);
       positionOverlay();
+      clearOverlay();
     }
     return;
   }
@@ -443,6 +488,7 @@ async function drawView() {
     if (img) {
       drawToCanvas(ui.previewCanvas, img.rgba, img.width, img.height);
       positionOverlay();
+      clearOverlay();
     }
     return;
   }
@@ -465,13 +511,8 @@ async function ensureRender(mode) {
   }
 }
 
-function drawCentroids() {
+function drawCentroids(ctx) {
   if (!state.lastSites) return;
-  const ctx = ui.overlayCanvas.getContext("2d");
-  // Overlay canvas drawing buffer matches the preview drawing buffer size
-  // (same width/height), so site coordinates map 1:1.
-  ui.overlayCanvas.width = state.lastRender.width;
-  ui.overlayCanvas.height = state.lastRender.height;
   ctx.save();
   ctx.fillStyle = "rgba(255, 196, 64, 0.82)";
   for (let i = 0; i < state.lastSiteCount; i += 1) {
@@ -484,7 +525,6 @@ function drawCentroids() {
     ctx.fill();
   }
   ctx.restore();
-  positionOverlay();
 }
 
 function stopTraining() {
@@ -518,7 +558,10 @@ function toggleParams() {
   ui.paramsPanel.classList.toggle("hidden");
   // Positioning depends on the preview's bounding rect, which changes when the
   // panel collapses/expands.
-  requestAnimationFrame(positionOverlay);
+  requestAnimationFrame(() => {
+    if (state.targetImage) updateCanvasLayout(state.targetImage.width, state.targetImage.height);
+    else positionOverlay();
+  });
 }
 
 async function main() {
@@ -551,7 +594,10 @@ async function main() {
   });
   ui.viewMode.addEventListener("change", drawView);
   window.addEventListener("resize", () => {
-    requestAnimationFrame(positionOverlay);
+    requestAnimationFrame(() => {
+      if (state.targetImage) updateCanvasLayout(state.targetImage.width, state.targetImage.height);
+      else positionOverlay();
+    });
   });
 }
 

@@ -90,7 +90,10 @@ export async function readRgba32FloatTexture(device, texture, width, height) {
 // If maxDim is set and the image's longest side exceeds it, returns a scaled
 // version (mirrors load_image() in train_wgpu.py).
 export async function loadImageToFloat32(file, maxDim = 0) {
-  const bitmap = await createImageBitmap(file, { colorSpaceConversion: "default" });
+  const bitmap = await createImageBitmap(file, {
+    colorSpaceConversion: "default",
+    imageOrientation: "from-image",
+  });
   let width = bitmap.width;
   let height = bitmap.height;
   const sourceWidth = width;
