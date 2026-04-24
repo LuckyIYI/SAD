@@ -120,7 +120,8 @@ final class PackedJFAEncoder {
             stepSize /= 2
         }
 
-        if numPasses % 2 == 0 {
+        // The first flood pass writes cand1, so odd pass counts finish in cand1.
+        if numPasses % 2 == 1 {
             if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
                 blitEncoder.label = "JFA Copy Result"
                 blitEncoder.copy(from: cand1,

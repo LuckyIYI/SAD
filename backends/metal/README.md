@@ -18,6 +18,10 @@ This writes the Metal executable and shader artifacts into `build/metal/`.
 ./run.sh --backend metal /path/to/image.png
 ```
 
+Default training output is `<image>.png` and `<image>_sites.txt`. Add
+`--include-debug-mask` to also write `<image>_cells.png` and
+`<image>_tau_heatmap.png`.
+
 Target a bits-per-pixel budget (16 bytes/site):
 
 ```bash
@@ -27,5 +31,5 @@ Target a bits-per-pixel budget (16 bytes/site):
 ## Render from Sites
 
 ```bash
-./run.sh --backend metal --render /path/to/sites.json
+./run.sh --backend metal --render /path/to/sites.txt
 ```

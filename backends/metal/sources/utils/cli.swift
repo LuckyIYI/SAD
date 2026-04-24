@@ -150,7 +150,6 @@ func makeTrainingOptions(defaults: Defaults) -> TrainingOptions {
         candInjectCount: defaults.candInjectCount,
         candHilbertWindow: defaults.candHilbertWindow,
         candHilbertProbes: defaults.candHilbertProbes,
-        exportCandPasses: nil,
         lrScale: 1.0,
         lrPosBase: defaults.lrPosBase,
         lrTauBase: defaults.lrTauBase,
@@ -168,7 +167,7 @@ func makeTrainingOptions(defaults: Defaults) -> TrainingOptions {
         logFreq: 1000,
         traceFrame: nil,
         outputDir: "results",
-        exportNeighbors: false,
+        includeDebugMasks: false,
         packedPSNR: false
     )
 }
@@ -201,7 +200,7 @@ func printUsage(defaults: Defaults) {
     let densifyAlphaStr = String(format: "%.3f", defaults.densifyScoreAlpha)
     print("Usage:")
     print("  ./run.sh --backend metal <image_path> [options]")
-    print("  ./run.sh --backend metal --render <sites.(json|txt)> [options]")
+    print("  ./run.sh --backend metal --render <sites.txt> [options]")
     print("  --help, -h            Show this help message")
     print("\nInitialization Modes:")
     print("  MODE 1: Per-pixel")
@@ -212,7 +211,7 @@ func printUsage(defaults: Defaults) {
     print("                         Requires --sites N (e.g. 500-1000)")
     print("    --init-gradient-alpha F    Gradient threshold scale (accept if grad > 0.01*alpha) (default: 1.0)")
     print("  MODE 3: From previous sites")
-    print("    --init-from-sites <path>   Initialize from existing sites JSON file")
+    print("    --init-from-sites <path>   Initialize from existing sites TXT or JSON file")
     print("                               Useful for video frame-by-frame training")
     print("\nTraining Options:")
     print("  --sites N              Number of sites for gradient init (default: \(defaults.nSites))")
@@ -241,6 +240,7 @@ func printUsage(defaults: Defaults) {
     print("  --ssim                 Log SSIM metric during training")
     print("  --packed-psnr          Re-render with packed inference and report PSNR (default: off)")
     print("  --mask <path>          Optional mask image (white=keep, black=ignore)")
+    print("  --include-debug-mask   Also write debug cell and tau heatmap PNGs")
     print("\nDensification Options:")
     print("  --densify              Enable densification (split high-error sites up to --max-sites)")
     print("  --densify-start N      Start densifying at iteration N (default: \(defaults.densifyStart))")
@@ -250,7 +250,7 @@ func printUsage(defaults: Defaults) {
     print("  --densify-score-alpha F Densify score normalization exponent (default: \(densifyAlphaStr))")
     print("  --max-sites N          Hard cap on total sites (default: \(defaults.maxSites))")
     print("\nRender Options:")
-    print("  --render <path>        Render from exported sites (JSON preferred)")
+    print("  --render <path>        Render from exported TXT sites")
     print("  --out <path>           Output PNG path (default: <sites>_render.png)")
     print("  --render-cells         Also write hashed cell visualization (<sites>_cells.png)")
     print("  --render-cand-passes N Candidate update passes before rendering (default: 16)")
@@ -268,11 +268,9 @@ func printUsage(defaults: Defaults) {
     print("  --viewer-freq N        Viewer update frequency in iterations (default: 10)")
     print("  --log-freq N           PSNR/SSIM logging frequency in iterations (default: 1000)")
     print("  --out-dir <path>       Output directory for all results (default: results/)")
-    print("  --export-neighbors     Compute and export neighbor graph in sites.json (default: off)")
     print("  --trace-frame N        Capture Metal GPU trace at iteration N (.gputrace file)")
     print("  --width N              Required for TXT render (no size in TXT)")
     print("  --height N             Required for TXT render (no size in TXT)")
-    print("  --export-cand-passes N Candidate update passes for final export (default: cand-passes)")
     print("\nExamples:")
     print("  # Default (recommended): gradient init + densification:")
     print("  ./run.sh image.jpg")
@@ -307,7 +305,7 @@ func parseArguments(_ args: [String], defaults: Defaults) -> RunMode {
         let sitesPath = args[i + 1]
         mode = .render(makeRenderOptions(defaults: defaults, sitesPath: sitesPath))
         i += 2
-    } else if args[i].hasSuffix("_sites.json") || args[i].hasSuffix("_sites.txt") {
+    } else if args[i].hasSuffix("_sites.txt") {
         let sitesPath = args[i]
         mode = .render(makeRenderOptions(defaults: defaults, sitesPath: sitesPath))
         i += 1
@@ -516,8 +514,8 @@ func parseArguments(_ args: [String], defaults: Defaults) -> RunMode {
                 print("Error: --mask requires a file path")
                 exit(1)
             }
-        case "--export-neighbors":
-            training.exportNeighbors = true
+        case "--include-debug-mask", "--include-debug-masks":
+            training.includeDebugMasks = true
             mode = .train(training)
             i += 1
         case "--packed-psnr":
@@ -754,15 +752,6 @@ func parseArguments(_ args: [String], defaults: Defaults) -> RunMode {
                 i += 2
             } else {
                 print("Error: --cand-hilbert-probes requires an integer argument")
-                exit(1)
-            }
-        case "--export-cand-passes":
-            if i + 1 < args.count, let val = Int(args[i + 1]) {
-                training.exportCandPasses = max(0, val)
-                mode = .train(training)
-                i += 2
-            } else {
-                print("Error: --export-cand-passes requires an integer argument")
                 exit(1)
             }
         case "--lr":

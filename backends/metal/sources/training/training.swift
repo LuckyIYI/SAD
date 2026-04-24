@@ -179,7 +179,6 @@ func trainVoronoi(_ options: TrainingOptions) {
 
     let scale = Float(max(target.width, target.height))
     let invScaleSq = 1.0 / (scale * scale)
-    let centroidRadius: Float = 2.0
     let maskedPixels = max(1.0, target.maskSum)
     let deltaNormPerPixel: Float = 1.0 / maskedPixels
     let tauDiffusePasses = 4
@@ -626,41 +625,7 @@ func trainVoronoi(_ options: TrainingOptions) {
         print(String(format: "Final SSIM: %.4f (best: %.4f)", finalSSIM, bestSSIM))
     }
 
-    let preRefreshPSNR = finalPSNR
-    let preRefreshSSIM = finalSSIM
     print("Saving result...")
-
-    let finalCandidatePasses = max(1, options.exportCandPasses ?? options.candUpdatePasses)
-    if finalCandidatePasses > 0 {
-        print("Refreshing candidates for final render...")
-        if let commandBuffer = commandQueue.makeCommandBuffer() {
-            let hilbertBuffers = usesVptHilbert
-                ? resolveHilbertBuffers(commandBuffer)
-                : (order: nil as MTLBuffer?, pos: nil as MTLBuffer?, probes: 0 as UInt32, window: 0 as UInt32)
-            packCandidateSites(encoder: candidatePackEncoder, commandBuffer: commandBuffer,
-                               sitesBuffer: buffers.sitesBuffer,
-                               packedBuffer: buffers.packedCandidatesBuffer,
-                               siteCount: nSitesU)
-            updateCandidatesCompact(encoder: compactCandidatesEncoder, commandBuffer: commandBuffer,
-                                    candidates: &candidates,
-                                    packedSitesBuffer: buffers.packedCandidatesBuffer, siteCount: nSitesU,
-                                    width: candidates.cand0A.width, height: candidates.cand0A.height,
-                                    targetWidth: target.width, targetHeight: target.height,
-                                    candDownscale: options.candDownscale,
-                                    invScaleSq: invScaleSq,
-                                    radiusScale: options.candRadiusScale,
-                                    radiusProbes: options.candRadiusProbes,
-                                    injectCount: options.candInjectCount,
-                                    hilbertOrder: hilbertBuffers.order,
-                                    hilbertPos: hilbertBuffers.pos,
-                                    hilbertProbeCount: hilbertBuffers.probes,
-                                    hilbertWindow: hilbertBuffers.window,
-                                    passes: finalCandidatePasses,
-                                    jumpPassIndex: &jumpPassIndex)
-            commandBuffer.commit()
-            commandBuffer.waitUntilCompleted()
-        }
-    }
 
     if let commandBuffer = commandQueue.makeCommandBuffer() {
         renderEncoder.encodeRender(cand0: candidates.cand0A, cand1: candidates.cand1A,
@@ -668,49 +633,27 @@ func trainVoronoi(_ options: TrainingOptions) {
                                    sitesBuffer: buffers.sitesBuffer, invScaleSq: invScaleSq,
                                    siteCount: nSitesU, in: commandBuffer)
 
-        psnrEncoder.encode(rendered: renderTextures.render, target: target.texture,
-                           mask: target.maskTexture,
-                           mseBuffer: psnrBuffer, in: commandBuffer)
-        if computeSSIMMetric, let ssimBuffer = ssimBuffer {
-            ssimEncoder.encode(rendered: renderTextures.render, target: target.texture,
-                               mask: target.maskTexture,
-                               ssimBuffer: ssimBuffer, in: commandBuffer)
+        if options.includeDebugMasks {
+            renderEncoder.encodeColoring(cand0: candidates.cand0A, cand1: candidates.cand1A,
+                                         output: renderTextures.voronoi,
+                                         sitesBuffer: buffers.sitesBuffer, invScaleSq: invScaleSq,
+                                         siteCount: nSitesU, in: commandBuffer)
+
+            let tauParams = TauHeatmapParams(
+                minTau: export.minTau,
+                meanTau: export.avgTau,
+                maxTau: export.maxTau,
+                dotRadius: 2.0
+            )
+            renderEncoder.encodeTauHeatmap(cand0: candidates.cand0A, cand1: candidates.cand1A,
+                                           output: renderTextures.tauHeatmap,
+                                           sitesBuffer: buffers.sitesBuffer,
+                                           params: tauParams,
+                                           siteCount: nSitesU, in: commandBuffer)
         }
-
-        renderEncoder.encodeColoring(cand0: candidates.cand0A, cand1: candidates.cand1A,
-                                     output: renderTextures.voronoi,
-                                     sitesBuffer: buffers.sitesBuffer, invScaleSq: invScaleSq,
-                                     siteCount: nSitesU, in: commandBuffer)
-
-        renderEncoder.encodeCentroids(cand0: candidates.cand0A, cand1: candidates.cand1A,
-                                      output: renderTextures.centroids,
-                                      sitesBuffer: buffers.sitesBuffer, dotRadius: centroidRadius,
-                                      siteCount: nSitesU, in: commandBuffer)
-
-        let tauParams = TauHeatmapParams(
-            minTau: export.minTau,
-            meanTau: export.avgTau,
-            maxTau: export.maxTau,
-            dotRadius: 2.0
-        )
-        renderEncoder.encodeTauHeatmap(cand0: candidates.cand0A, cand1: candidates.cand1A,
-                                       output: renderTextures.tauHeatmap,
-                                       sitesBuffer: buffers.sitesBuffer,
-                                       params: tauParams,
-                                       siteCount: nSitesU, in: commandBuffer)
 
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-    }
-
-    let postMSE = psnrBuffer.contents().load(as: Float.self) / Float(max(1.0, target.maskSum) * 3.0)
-    let postRefreshPSNR = postMSE > 0 ? 20.0 * log10(1.0 / sqrt(postMSE)) : 100.0
-    print(String(format: "Final PSNR (pre-refresh): %.2f dB | post-refresh: %.2f dB",
-                 preRefreshPSNR, postRefreshPSNR))
-    if computeSSIMMetric, let ssimBuffer = ssimBuffer {
-        let postRefreshSSIM = ssimBuffer.contents().load(as: Float.self) / Float(max(1.0, target.maskSum))
-        print(String(format: "Final SSIM (pre-refresh): %.4f | post-refresh: %.4f",
-                     preRefreshSSIM, postRefreshSSIM))
     }
 
     ensureDirectory(options.outputDir)
@@ -719,78 +662,16 @@ func trainVoronoi(_ options: TrainingOptions) {
     saveTexture(renderTextures.render, path: paths.imagePath)
     print("Saved: \(paths.imagePath)")
 
-    saveTexture(renderTextures.voronoi, path: paths.cellPath)
-    print("Saved: \(paths.cellPath)")
+    if options.includeDebugMasks {
+        saveTexture(renderTextures.voronoi, path: paths.cellPath)
+        print("Saved: \(paths.cellPath)")
 
-    saveTexture(renderTextures.centroids, path: paths.centroidsPath)
-    print("Saved: \(paths.centroidsPath)")
-
-    saveTexture(renderTextures.tauHeatmap, path: paths.tauHeatmapPath)
-    print("Saved: \(paths.tauHeatmapPath)")
-
-    let stats = TrainingStats(
-        initialSites: actualNSites,
-        finalSites: export.activeCount,
-        finalPSNR: finalPSNR,
-        bestPSNR: bestPSNR,
-        finalSSIM: computeSSIMMetric ? finalSSIM : nil,
-        bestSSIM: computeSSIMMetric ? bestSSIM : nil,
-        totalTime: trainTime,
-        avgSpeed: avgSpeed,
-        minTau: export.minTau,
-        maxTau: export.maxTau,
-        avgTau: export.avgTau,
-        minRadius: export.minRadius,
-        maxRadius: export.maxRadius,
-        avgRadius: export.avgRadius
-    )
-
-    let timestamp = makeTimestamp()
-    let report = buildTextReport(options: options,
-                                 width: target.width,
-                                 height: target.height,
-                                 effectivePruneEndIter: effectivePruneEndIter,
-                                 paths: paths,
-                                 timestamp: timestamp,
-                                 stats: stats)
-
-    if let reportData = report.data(using: .utf8) {
-        try? reportData.write(to: URL(fileURLWithPath: paths.reportPath))
-        print("Saved: \(paths.reportPath)")
-    }
-
-    let mdReport = buildMarkdownReport(options: options,
-                                       width: target.width,
-                                       height: target.height,
-                                       timestamp: timestamp,
-                                       stats: stats)
-    if let mdData = mdReport.data(using: .utf8) {
-        try? mdData.write(to: URL(fileURLWithPath: paths.mdPath))
-        print("Saved: \(paths.mdPath)")
+        saveTexture(renderTextures.tauHeatmap, path: paths.tauHeatmapPath)
+        print("Saved: \(paths.tauHeatmapPath)")
     }
 
     writeSitesTXT(sites: export.sites, width: target.width, height: target.height, path: paths.sitesPath)
     print("Saved: \(paths.sitesPath)")
-
-    let neighbors: [[Int]]
-    if options.exportNeighbors {
-        let sitesPtrFinal = buffers.sitesBuffer.contents().bindMemory(to: VoronoiSite.self, capacity: actualNSites)
-        neighbors = computeSiteNeighbors(
-            cand0: candidates.cand0A,
-            cand1: candidates.cand1A,
-            sites: sitesPtrFinal,
-            siteCount: actualNSites,
-            activeMap: export.activeMap,
-            activeCount: export.activeCount,
-            invScaleSq: invScaleSq)
-        print("Neighbors computed (unique edges: ~\(neighbors.reduce(0) { $0 + $1.count } / 2)).")
-    } else {
-        neighbors = Array(repeating: [], count: export.sites.count)
-    }
-
-    writeSitesJSON(sites: export.sites, width: target.width, height: target.height,
-                   neighbors: neighbors, path: paths.jsonPath)
-    print("Saved: \(paths.jsonPath)")
 
     var packedPSNRValue: Float? = nil
     if options.packedPSNR {

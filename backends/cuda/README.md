@@ -37,4 +37,4 @@ Target a bits-per-pixel budget (16 bytes/site):
 ## Notes
 
 - Uses `training_config.json` from the repo root (required).
-- Exports trained sites as TXT. Render-only mode accepts TXT or JSON site files.
+- Exports trained sites as TXT. Render-only mode uses TXT site files.

@@ -70,47 +70,6 @@ kernel void renderVoronoiColoringPacked(
     output.write(float4(color, 1.0f), gid);
 }
 
-kernel void renderVoronoiCentroidsPacked(
-    texture2d<uint, access::read>   candidates0 [[texture(0)]],
-    texture2d<uint, access::read>   candidates1 [[texture(1)]],
-    texture2d<float, access::write> output [[texture(2)]],
-    constant PackedInferenceSite *sites [[buffer(0)]],
-    constant PackedSiteQuant &quant [[buffer(1)]],
-    constant float &dot_radius [[buffer(2)]],
-    constant uint &siteCount [[buffer(3)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    uint width = output.get_width();
-    uint height = output.get_height();
-    if (gid.x >= width || gid.y >= height) return;
-    float2 dims = float2(float(width - 1), float(height - 1));
-
-    float2 uv = float2(gid);
-
-    uint candIds[8];
-    uint2 outSize = uint2(width, height);
-    loadCandidateIds(candidates0, candidates1, gid, outSize, candIds);
-
-    float radius = dot_radius * dot_radius;
-    bool hit = false;
-
-    for (uint i = 0; i < 8; ++i) {
-        uint idx = candIds[i];
-        if (idx >= siteCount) continue;
-        PackedInferenceSite packed = sites[idx];
-        if (!packedActive(packed)) continue;
-        VoronoiSite site = decodePackedSite(packed, dims, quant);
-        float2 diff = uv - site.position;
-        if (dot(diff, diff) <= radius) {
-            hit = true;
-            break;
-        }
-    }
-
-    float v = hit ? 1.0f : 0.0f;
-    output.write(float4(v, v, v, 1.0f), gid);
-}
-
 kernel void renderCentroidsTauHeatmapPacked(
     texture2d<uint, access::read>   candidates0 [[texture(0)]],
     texture2d<uint, access::read>   candidates1 [[texture(1)]],

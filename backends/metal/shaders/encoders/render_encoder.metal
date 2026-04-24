@@ -133,44 +133,6 @@ kernel void renderVoronoiColoring(
     output.write(float4(color, 1.0f), gid);
 }
 
-kernel void renderVoronoiCentroids(
-    texture2d<uint, access::read>   candidates0 [[texture(0)]],
-    texture2d<uint, access::read>   candidates1 [[texture(1)]],
-    texture2d<float, access::write> output [[texture(2)]],
-    constant VoronoiSite *sites [[buffer(0)]],
-    constant float &dot_radius [[buffer(1)]],
-    constant uint &siteCount [[buffer(2)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    uint width = output.get_width();
-    uint height = output.get_height();
-    if (gid.x >= width || gid.y >= height) return;
-
-    float2 uv = float2(gid);
-
-    uint candIds[8];
-    uint2 outSize = uint2(width, height);
-    loadCandidateIds(candidates0, candidates1, gid, outSize, candIds);
-
-    float radius = dot_radius * dot_radius;
-    bool hit = false;
-
-    for (uint i = 0; i < 8; ++i) {
-        uint idx = candIds[i];
-        if (idx >= siteCount) continue;
-        VoronoiSite site = sites[idx];
-        if (site.position.x < 0.0f) continue;
-        float2 diff = uv - site.position;
-        if (dot(diff, diff) <= radius) {
-            hit = true;
-            break;
-        }
-    }
-
-    float v = hit ? 1.0f : 0.0f;
-    output.write(float4(v, v, v, 1.0f), gid);
-}
-
 kernel void renderCentroidsTauHeatmap(
     texture2d<uint, access::read>   candidates0 [[texture(0)]],
     texture2d<uint, access::read>   candidates1 [[texture(1)]],

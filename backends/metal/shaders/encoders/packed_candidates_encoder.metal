@@ -45,7 +45,7 @@ kernel void updateCandidatesPacked(
 
     thread uint bestIdx[8];
     thread float bestD2[8];
-    for (uint i = 0; i < 4; ++i) {
+    for (uint i = 0; i < 8; ++i) {
         bestIdx[i] = 0xffffffffu;
         bestD2[i] = INFINITY;
     }
@@ -53,7 +53,7 @@ kernel void updateCandidatesPacked(
     mergeCandidates8Packed(bestIdx, bestD2, self0, self1, uv, sites, quant, siteCount,
                            inv_scale_sq, dims);
 
-    for (uint i = 0; i < 8; ++i) {
+    for (uint i = 0; i < 4; ++i) {
         int2 p = clamp(gi + offsets[i] * int(jumpStep), int2(0), int2(width-1, height-1));
         uint2 pu = uint2(p);
         uint4 neigh1 = inCand1.read(pu);

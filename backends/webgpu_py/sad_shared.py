@@ -48,10 +48,7 @@ def pack_jump_step(step_index: int, width: int, height: int) -> int:
     if pow2 <= 1:
         return 1
     stages = pow2.bit_length() - 1
-    if stages <= 0:
-        stage = 0
-    else:
-        stage = stages - 1 if step_index >= stages else step_index
+    stage = min(step_index, max(0, stages - 1))
     step = pow2 >> (stage + 1)
     step = max(step, 1)
     step = min(step, 0xFFFF)

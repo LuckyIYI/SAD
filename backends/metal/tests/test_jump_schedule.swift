@@ -27,12 +27,7 @@ func jumpStepForIndex(_ stepIndex: UInt32, width: Int, height: Int) -> UInt32 {
         tmp >>= 1
         stages += 1
     }
-    let stage: UInt32
-    if stages > 0 {
-        stage = stepIndex >= stages ? (stages - 1) : stepIndex
-    } else {
-        stage = 0
-    }
+    let stage = min(stepIndex, stages > 0 ? stages - 1 : 0)
     let step = pow2 >> (stage + 1)
     return max(step, 1)
 }
@@ -417,6 +412,7 @@ func runTest() throws {
                                                                       in: commandBuffer)
                                     jfaEncoder.encodeSeed(cand0: cand0A,
                                                           sitesBuffer: sitesBuffer, siteCount: UInt32(siteCount),
+                                                          candDownscale: 1,
                                                           in: commandBuffer)
                                     let (ms, usedGpu) = measureCommandBuffer(commandBuffer)
                                     initMs = ms
@@ -437,10 +433,10 @@ func runTest() throws {
 
                                 if passes > 0 {
                                     if let commandBuffer = commandQueue.makeCommandBuffer() {
-                                        packCandidateSites(encoder: candidatePackEncoder, commandBuffer: commandBuffer,
-                                                           sitesBuffer: sitesBuffer,
-                                                           packedBuffer: packedCandidatesBuffer,
-                                                           siteCount: UInt32(siteCount))
+                                        candidatePackEncoder.encode(sitesBuffer: sitesBuffer,
+                                                                    packedBuffer: packedCandidatesBuffer,
+                                                                    siteCount: UInt32(siteCount),
+                                                                    in: commandBuffer)
                                         for pass in 0..<passes {
                                             let step = packJumpStep(UInt32(pass), width: width, height: height)
                                             let stepHigh = UInt32(pass) >> 16

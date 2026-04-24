@@ -22,12 +22,7 @@ func jumpStepForIndex(_ stepIndex: UInt32, width: Int, height: Int) -> UInt32 {
         tmp >>= 1
         stages += 1
     }
-    let stage: UInt32
-    if stages > 0 {
-        stage = stepIndex >= stages ? (stages - 1) : stepIndex
-    } else {
-        stage = 0
-    }
+    let stage = min(stepIndex, stages > 0 ? stages - 1 : 0)
     let step = pow2 >> (stage + 1)
     return max(step, 1)
 }

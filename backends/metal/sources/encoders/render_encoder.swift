@@ -12,20 +12,17 @@ struct TauHeatmapParams {
 final class RenderEncoder {
     private let renderPipeline: MTLComputePipelineState
     private let coloringPipeline: MTLComputePipelineState
-    private let centroidsPipeline: MTLComputePipelineState
     private let tauHeatmapPipeline: MTLComputePipelineState
 
     init(device: MTLDevice, library: MTLLibrary) throws {
         guard let renderFunc = library.makeFunction(name: "renderVoronoi"),
               let coloringFunc = library.makeFunction(name: "renderVoronoiColoring"),
-              let centroidsFunc = library.makeFunction(name: "renderVoronoiCentroids"),
               let tauHeatmapFunc = library.makeFunction(name: "renderCentroidsTauHeatmap") else {
             throw NSError(domain: "RenderEncoder", code: 1,
                          userInfo: [NSLocalizedDescriptionKey: "Missing render kernels"])
         }
         self.renderPipeline = try device.makeComputePipelineState(function: renderFunc)
         self.coloringPipeline = try device.makeComputePipelineState(function: coloringFunc)
-        self.centroidsPipeline = try device.makeComputePipelineState(function: centroidsFunc)
         self.tauHeatmapPipeline = try device.makeComputePipelineState(function: tauHeatmapFunc)
     }
 
@@ -65,27 +62,6 @@ final class RenderEncoder {
         var invScaleSqVar = invScaleSq
         var siteCountVar = siteCount
         encoder.setBytes(&invScaleSqVar, length: MemoryLayout<Float>.stride, index: 1)
-        encoder.setBytes(&siteCountVar, length: MemoryLayout<UInt32>.stride, index: 2)
-
-        dispatchGrid(encoder: encoder, texture: output)
-        encoder.endEncoding()
-    }
-
-    /// Render centroid dots (visualization)
-    func encodeCentroids(cand0: MTLTexture, cand1: MTLTexture, output: MTLTexture,
-                         sitesBuffer: MTLBuffer, dotRadius: Float, siteCount: UInt32,
-                         in commandBuffer: MTLCommandBuffer) {
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
-        encoder.label = "Render Centroids"
-        encoder.setComputePipelineState(centroidsPipeline)
-        encoder.setTexture(cand0, index: 0)
-        encoder.setTexture(cand1, index: 1)
-        encoder.setTexture(output, index: 2)
-        encoder.setBuffer(sitesBuffer, offset: 0, index: 0)
-
-        var dotRadiusVar = dotRadius
-        var siteCountVar = siteCount
-        encoder.setBytes(&dotRadiusVar, length: MemoryLayout<Float>.stride, index: 1)
         encoder.setBytes(&siteCountVar, length: MemoryLayout<UInt32>.stride, index: 2)
 
         dispatchGrid(encoder: encoder, texture: output)

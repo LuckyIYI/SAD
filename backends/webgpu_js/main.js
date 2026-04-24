@@ -1,16 +1,9 @@
 const fileInput = document.getElementById("fileInput");
-const fileInputB = document.getElementById("fileInputB");
 const renderModeSelect = document.getElementById("renderModeSelect");
 const dotsToggle = document.getElementById("dotsToggle");
-const interpSlider = document.getElementById("interpSlider");
-const interpValue = document.getElementById("interpValue");
-const fitBtn = document.getElementById("fitBtn");
-const resetBtn = document.getElementById("resetBtn");
 const exportBtn = document.getElementById("exportBtn");
-const deleteBtn = document.getElementById("deleteBtn");
 const statusEl = document.getElementById("status");
 const canvas = document.getElementById("gpuCanvas");
-const overlayCanvas = document.getElementById("overlayCanvas");
 const fallback = document.getElementById("fallback");
 
 let device = null;
@@ -25,8 +18,6 @@ let imageWidth = 0;
 let imageHeight = 0;
 let zoom = 1.0;
 let pan = { x: 0, y: 0 };
-let dragging = false;
-let lastMouse = { x: 0, y: 0 };
 let renderQueued = false;
 let candidateWidth = 0;
 let candidateHeight = 0;
@@ -34,20 +25,10 @@ let currentCand0 = null;
 let currentCand1 = null;
 let altCand0 = null;
 let altCand1 = null;
-let pendingUpdates = 0;
-let jumpPassIndex = 0;
 let warmupInFlight = false;
-const updateTailFrames = 32;
-const interpTailFrames = 16;
-const vptPassesPerFrame = 1;
+const TOPK_WARMUP_PASSES = 32;
 
-// Selection state
-let selecting = false;
-let selectionStart = null;
-let selectionEnd = null;
-let selectedSites = new Set();
 let siteData = [];
-let overlayCtx = null;
 let siteBufferSize = 0;
 let packedSiteBufferSize = 0;
 let hilbertBufferSize = 0;
@@ -61,20 +42,7 @@ let minRadius = 0;
 let maxRadius = 1;
 
 const invalidId = 0xffffffff;
-const interpPrecision = 2;
 const PACKED_CAND_BYTES = 16;
-
-let baseSitesA = null;
-let baseSitesB = null;
-let baseWidthA = 0;
-let baseHeightA = 0;
-let baseWidthB = 0;
-let baseHeightB = 0;
-let interpT = 0.0;
-let interpApplyScheduled = false;
-let interpQueuedT = 0.0;
-let interpActive = false;
-let interpTailLeft = 0;
 
 const vertexData = new Float32Array([
   -1, -1,
@@ -106,7 +74,9 @@ async function loadConfig() {
     }
     sharedConfig = await response.json();
   } catch (err) {
-    throw err;
+    // The viewer is intentionally usable from file:// with the embedded WGSL
+    // fallback. If config fetch is blocked there, keep the built-in defaults.
+    sharedConfig = null;
   }
   return sharedConfig;
 }
@@ -162,21 +132,12 @@ function setStatus(message) {
   statusEl.textContent = message;
 }
 
-updateInterpUI();
-
-function updateInterpUI() {
-  const enabled = baseSitesA && baseSitesB && baseSitesA.length === baseSitesB.length;
-  interpSlider.disabled = !enabled;
-  if (!enabled) {
-    interpSlider.value = "0";
-    interpValue.textContent = "0.00";
-    interpT = 0.0;
-  }
+function updateActionButtons() {
+  const hasSites = siteCount > 0;
+  exportBtn.disabled = !hasSites;
 }
 
-function canInterpolate() {
-  return baseSitesA && baseSitesB && baseSitesA.length === baseSitesB.length;
-}
+updateActionButtons();
 
 function parseSites(text) {
   const lines = text.split(/\r?\n/);
@@ -211,63 +172,16 @@ function parseSites(text) {
   return { sites: data, width, height };
 }
 
-function interpolateSites(sitesA, sitesB, t) {
-  const count = Math.min(sitesA.length, sitesB.length);
-  const out = new Array(count);
-  for (let i = 0; i < count; i += 1) {
-    const a = sitesA[i];
-    const b = sitesB[i];
-    const len = Math.min(a.length, b.length);
-    const blended = new Array(len);
-    for (let j = 0; j < len; j += 1) {
-      blended[j] = a[j] + (b[j] - a[j]) * t;
-    }
-    out[i] = blended;
-  }
-  return out;
-}
-
-function buildCurrentSites() {
-  if (!baseSitesA) return null;
-  if (canInterpolate()) {
-    return interpolateSites(baseSitesA, baseSitesB, interpT);
-  }
-  return baseSitesA;
-}
-
-function scheduleInterpolation() {
-  if (!canInterpolate()) {
-    return;
-  }
-  interpQueuedT = interpT;
-  if (interpApplyScheduled) {
-    return;
-  }
-  interpApplyScheduled = true;
-  requestAnimationFrame(() => {
-    interpApplyScheduled = false;
-    const nextSites = interpolateSites(baseSitesA, baseSitesB, interpQueuedT);
-    clearSelection();
-    uploadSites(nextSites, { tailFrames: 0 });
-    updateViewBuffer();
-    requestRender();
-  });
-}
-
-function clearSelection() {
-  selectedSites.clear();
-  deleteBtn.classList.add("hidden");
-  drawOverlay();
-}
-
 async function initWebGPU() {
   if (!navigator.gpu) {
     fallback.classList.remove("hidden");
+    setStatus("WebGPU is not available in this browser.");
     return;
   }
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) {
     fallback.classList.remove("hidden");
+    setStatus("No WebGPU adapter found.");
     return;
   }
   applyConfig(await loadConfig());
@@ -283,7 +197,7 @@ async function initWebGPU() {
     resizeCanvas();
     requestRender();
   });
-  attachInteractions();
+  setStatus("Ready. Choose a sites.txt file.");
 }
 
 async function ensureInitialized() {
@@ -439,10 +353,7 @@ function jumpStepForIndex(stepIndex, width, height) {
     tmp >>= 1;
     stages += 1;
   }
-  let stage = 0;
-  if (stages > 0) {
-    stage = stepIndex >= stages ? (stages - 1) : stepIndex;
-  }
+  const stage = stages > 0 ? Math.min(stepIndex, stages - 1) : 0;
   const step = pow2 >> (stage + 1);
   return Math.max(step, 1);
 }
@@ -491,20 +402,6 @@ function updateViewBuffer() {
   });
 }
 
-function updateCandidateViewBuffer() {
-  writeViewBufferData(buffers.updateViewBuffer, {
-    imageWidth,
-    imageHeight,
-    canvasWidth: imageWidth,
-    canvasHeight: imageHeight,
-    panX: 0,
-    panY: 0,
-    zoom: 1.0,
-    renderMode: 0,
-    showDots: false,
-  });
-}
-
 function writeViewBufferData(targetBuffer, {
   imageWidth: imgW,
   imageHeight: imgH,
@@ -542,15 +439,9 @@ function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
   canvas.width = Math.max(1, Math.floor(rect.width * devicePixelRatio));
   canvas.height = Math.max(1, Math.floor(rect.height * devicePixelRatio));
-  overlayCanvas.width = rect.width;
-  overlayCanvas.height = rect.height;
-  if (!overlayCtx) {
-    overlayCtx = overlayCanvas.getContext("2d");
-  }
   if (imageWidth > 0 && imageHeight > 0) {
     fitView();
   }
-  drawOverlay();
 }
 
 function ensureViewCandidates() {
@@ -569,18 +460,10 @@ function ensureViewCandidates() {
     altCand1 = textures.cand1B;
     textures.finalCand0 = null;
     textures.finalCand1 = null;
-    pendingUpdates = updateTailFrames;
-    jumpPassIndex = 0;
   }
 }
 
 function markViewDirty() {
-  requestRender();
-  drawOverlay();
-}
-
-function markCandidatesDirty() {
-  pendingUpdates = Math.max(pendingUpdates, updateTailFrames);
   requestRender();
 }
 
@@ -601,13 +484,6 @@ function fitView() {
   const zoomX = canvas.width / imageWidth;
   const zoomY = canvas.height / imageHeight;
   zoom = Math.min(zoomX, zoomY);
-  pan = { x: 0, y: 0 };
-  updateViewBuffer();
-  markViewDirty();
-}
-
-function resetView() {
-  zoom = 1.0;
   pan = { x: 0, y: 0 };
   updateViewBuffer();
   markViewDirty();
@@ -821,7 +697,7 @@ function warmUpCandidates({
   const encoder = device.createCommandEncoder();
 
   // Match Metal's algorithm: random init + N pairs of (JFA + VPT)
-  const numWarmupPasses = 16;
+  const numWarmupPasses = TOPK_WARMUP_PASSES;
   const initSeed = 12345;
 
   let cand0A = targetTextures.cand0A;
@@ -1002,45 +878,7 @@ function renderFrame() {
   }
 
   const encoder = device.createCommandEncoder();
-  const shouldUpdate = pendingUpdates > 0 || interpActive || interpTailLeft > 0;
-  if (shouldUpdate) {
-    updateCandidateViewBuffer();
-    const hilbertBuffers = getHilbertBuffers();
-    for (let pass = 0; pass < vptPassesPerFrame; pass += 1) {
-      const step = packJumpStep(jumpPassIndex, candidateWidth, candidateHeight);
-      const stepHigh = (jumpPassIndex >>> 16);
-      updateParamsBuffer(step, stepHigh);
-      const updatePass = encoder.beginComputePass();
-      updatePass.setPipeline(pipelines.updatePipeline);
-      updatePass.setBindGroup(0, device.createBindGroup({
-        layout: pipelines.updatePipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: buffers.packedSitesBuffer } },
-          { binding: 1, resource: { buffer: buffers.paramsBuffer } },
-          { binding: 2, resource: currentCand0.createView() },
-          { binding: 3, resource: currentCand1.createView() },
-          { binding: 4, resource: altCand0.createView() },
-          { binding: 5, resource: altCand1.createView() },
-          { binding: 6, resource: { buffer: hilbertBuffers.order } },
-          { binding: 7, resource: { buffer: hilbertBuffers.pos } },
-        ],
-      }));
-      updatePass.dispatchWorkgroups(Math.ceil(candidateWidth / 16), Math.ceil(candidateHeight / 16));
-      updatePass.end();
-
-      [currentCand0, altCand0] = [altCand0, currentCand0];
-      [currentCand1, altCand1] = [altCand1, currentCand1];
-      jumpPassIndex = (jumpPassIndex + 1) >>> 0;
-    }
-    if (pendingUpdates > 0) {
-      pendingUpdates -= 1;
-    }
-    if (!interpActive && interpTailLeft > 0) {
-      interpTailLeft -= 1;
-    }
-  } else {
-    updateParamsBuffer(0, 0);
-  }
+  updateParamsBuffer(0, 0);
 
   updateViewBuffer();
   const renderPass = encoder.beginRenderPass({
@@ -1068,9 +906,6 @@ function renderFrame() {
   renderPass.end();
 
   device.queue.submit([encoder.finish()]);
-  if (pendingUpdates > 0 || interpActive || interpTailLeft > 0) {
-    requestRender();
-  }
 }
 
 function computeParameterRanges(sites) {
@@ -1101,7 +936,7 @@ function computeParameterRanges(sites) {
   if (maxRadius === minRadius) maxRadius = minRadius + 1;
 }
 
-function uploadSites(sites, { tailFrames = updateTailFrames } = {}) {
+function uploadSites(sites) {
   siteCount = sites.length;
   siteData = sites;
   computeParameterRanges(sites);
@@ -1135,8 +970,7 @@ function uploadSites(sites, { tailFrames = updateTailFrames } = {}) {
   ensurePackedBuffers(siteCount);
   updateHilbertBuffers(sites);
   updatePackedSites(siteCount);
-  pendingUpdates = Math.max(pendingUpdates, tailFrames);
-  requestRender();
+  updateActionButtons();
 }
 
 async function applySites(sites, { fit = false, warmup = false } = {}) {
@@ -1169,17 +1003,12 @@ async function applySites(sites, { fit = false, warmup = false } = {}) {
       warmupInFlight = false;
     }
     syncCandidateState();
-    jumpPassIndex = 0;
-    pendingUpdates = 0;
-  } else {
-    jumpPassIndex = 0;
-    markCandidatesDirty();
   }
   updateViewBuffer();
   requestRender();
 }
 
-async function loadSitesFromInput(inputEl, { label, isPrimary } = {}) {
+async function loadSitesFromInput(inputEl) {
   try {
     await ensureInitialized();
   } catch (err) {
@@ -1190,6 +1019,10 @@ async function loadSitesFromInput(inputEl, { label, isPrimary } = {}) {
   if (!file) {
     setStatus("Choose a .txt file first.");
     return;
+  }
+  const fileLabel = inputEl.closest(".file")?.querySelector("span");
+  if (fileLabel) {
+    fileLabel.textContent = file.name;
   }
   const text = await file.text();
   const parsed = parseSites(text);
@@ -1202,447 +1035,20 @@ async function loadSitesFromInput(inputEl, { label, isPrimary } = {}) {
     setStatus("Missing image size in TXT header (expected: # Image size: W H).");
     return;
   }
-  if (isPrimary) {
-    baseSitesA = sites;
-    baseWidthA = parsed.width;
-    baseHeightA = parsed.height;
-    imageWidth = parsed.width;
-    imageHeight = parsed.height;
-  } else {
-    baseSitesB = sites;
-    baseWidthB = parsed.width;
-    baseHeightB = parsed.height;
-  }
-
-  updateInterpUI();
-
-  if (!baseSitesA) {
-    setStatus(`Loaded ${label}. Load primary file to render.`);
-    return;
-  }
-
-  if (baseSitesB && baseSitesA.length !== baseSitesB.length) {
-    setStatus(`Site count mismatch: A=${baseSitesA.length}, B=${baseSitesB.length}. Interpolation disabled.`);
-    await applySites(baseSitesA, { fit: isPrimary, warmup: true });
-    return;
-  }
-
-  if (baseSitesB && (baseWidthA !== baseWidthB || baseHeightA !== baseHeightB)) {
-    setStatus(`Image size mismatch: A=${baseWidthA}x${baseHeightA}, B=${baseWidthB}x${baseHeightB}. Using A size.`);
-  }
-
-  const nextSites = buildCurrentSites();
-  if (!nextSites) {
-    setStatus("No sites available for rendering.");
-    return;
-  }
-
-  clearSelection();
-  await applySites(nextSites, { fit: isPrimary, warmup: true });
-
-  const interpNote = canInterpolate()
-    ? ` Interp t=${interpT.toFixed(interpPrecision)}.`
-    : " Load a second file to interpolate.";
-  setStatus(`Loaded ${baseSitesA.length} sites. Render size ${imageWidth}x${imageHeight}.${interpNote}`);
-}
-
-// Helper: convert canvas client coords to image coords
-function canvasToImage(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  const canvasPx = {
-    x: (clientX - rect.left) * devicePixelRatio,
-    y: (clientY - rect.top) * devicePixelRatio,
-  };
-  const centered = {
-    x: (canvasPx.x - canvas.width * 0.5) / zoom,
-    y: (canvasPx.y - canvas.height * 0.5) / zoom,
-  };
-  return {
-    x: centered.x + imageWidth * 0.5 + pan.x,
-    y: centered.y + imageHeight * 0.5 + pan.y,
-  };
-}
-
-// Helper: convert image coords to overlay canvas coords
-function imageToOverlay(imgX, imgY) {
-  const centered = {
-    x: (imgX - imageWidth * 0.5 - pan.x) * zoom,
-    y: (imgY - imageHeight * 0.5 - pan.y) * zoom,
-  };
-  const canvasPx = {
-    x: centered.x + canvas.width * 0.5,
-    y: centered.y + canvas.height * 0.5,
-  };
-  return {
-    x: canvasPx.x / devicePixelRatio,
-    y: canvasPx.y / devicePixelRatio,
-  };
-}
-
-// Draw selection overlay
-function drawOverlay() {
-  if (!overlayCtx) return;
-  overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-
-  // Draw selected sites highlights
-  if (selectedSites.size > 0) {
-    overlayCtx.fillStyle = "rgba(255, 100, 100, 0.3)";
-    overlayCtx.strokeStyle = "rgba(255, 50, 50, 0.8)";
-    overlayCtx.lineWidth = 2;
-    for (const siteIdx of selectedSites) {
-      if (siteIdx < siteData.length && siteData[siteIdx][0] >= 0) {
-        const pos = imageToOverlay(siteData[siteIdx][0], siteData[siteIdx][1]);
-        overlayCtx.beginPath();
-        overlayCtx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
-        overlayCtx.fill();
-        overlayCtx.stroke();
-      }
-    }
-  }
-
-  // Draw selection rectangle
-  if (selecting && selectionStart && selectionEnd) {
-    const rect = canvas.getBoundingClientRect();
-    const startX = (selectionStart.x - rect.left);
-    const startY = (selectionStart.y - rect.top);
-    const endX = (selectionEnd.x - rect.left);
-    const endY = (selectionEnd.y - rect.top);
-    const width = endX - startX;
-    const height = endY - startY;
-
-    overlayCtx.strokeStyle = "rgba(100, 150, 255, 0.8)";
-    overlayCtx.fillStyle = "rgba(100, 150, 255, 0.15)";
-    overlayCtx.lineWidth = 2;
-    overlayCtx.strokeRect(startX, startY, width, height);
-    overlayCtx.fillRect(startX, startY, width, height);
-  }
-}
-
-function attachInteractions() {
-  canvas.addEventListener("pointerdown", (event) => {
-    if (event.metaKey || event.ctrlKey) {
-      // Start selection mode
-      selecting = true;
-      selectionStart = { x: event.clientX, y: event.clientY };
-      selectionEnd = { x: event.clientX, y: event.clientY };
-      selectedSites.clear();
-      deleteBtn.classList.add("hidden");
-      drawOverlay();
-    } else {
-      // Normal pan mode
-      dragging = true;
-      lastMouse = { x: event.clientX, y: event.clientY };
-    }
-  });
-  window.addEventListener("pointerup", (event) => {
-    if (selecting) {
-      // Finish selection
-      selecting = false;
-      if (selectionStart && selectionEnd) {
-        // Find sites within rectangle
-        const imgStart = canvasToImage(selectionStart.x, selectionStart.y);
-        const imgEnd = canvasToImage(selectionEnd.x, selectionEnd.y);
-        const minX = Math.min(imgStart.x, imgEnd.x);
-        const maxX = Math.max(imgStart.x, imgEnd.x);
-        const minY = Math.min(imgStart.y, imgEnd.y);
-        const maxY = Math.max(imgStart.y, imgEnd.y);
-
-        selectedSites.clear();
-        for (let i = 0; i < siteData.length; i++) {
-          const site = siteData[i];
-          const x = site[0];
-          const y = site[1];
-          if (x >= 0 && x >= minX && x <= maxX && y >= minY && y <= maxY) {
-            selectedSites.add(i);
-          }
-        }
-
-        if (selectedSites.size > 0) {
-          deleteBtn.classList.remove("hidden");
-        }
-      }
-      drawOverlay();
-    }
-    dragging = false;
-  });
-  window.addEventListener("pointermove", (event) => {
-    if (selecting) {
-      selectionEnd = { x: event.clientX, y: event.clientY };
-      drawOverlay();
-      return;
-    }
-    if (!dragging) return;
-    const dx = (event.clientX - lastMouse.x) * devicePixelRatio;
-    const dy = (event.clientY - lastMouse.y) * devicePixelRatio;
-    pan.x -= dx / zoom;
-    pan.y -= dy / zoom;
-    lastMouse = { x: event.clientX, y: event.clientY };
-    markViewDirty();
-  });
-  canvas.addEventListener("wheel", (event) => {
-    if (imageWidth === 0 || imageHeight === 0) {
-      return;
-    }
-    event.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = (event.clientX - rect.left) * devicePixelRatio;
-    const mouseY = (event.clientY - rect.top) * devicePixelRatio;
-    const canvasCenter = { x: canvas.width * 0.5, y: canvas.height * 0.5 };
-    const preZoom = zoom;
-    const zoomFactor = event.deltaY < 0 ? 1.1 : 0.9;
-    zoom = Math.min(40, Math.max(0.1, zoom * zoomFactor));
-
-    const before = {
-      x: (mouseX - canvasCenter.x) / preZoom + imageWidth * 0.5 + pan.x,
-      y: (mouseY - canvasCenter.y) / preZoom + imageHeight * 0.5 + pan.y,
-    };
-    const after = {
-      x: (mouseX - canvasCenter.x) / zoom + imageWidth * 0.5 + pan.x,
-      y: (mouseY - canvasCenter.y) / zoom + imageHeight * 0.5 + pan.y,
-    };
-    pan.x += before.x - after.x;
-    pan.y += before.y - after.y;
-    markViewDirty();
-  }, { passive: false });
+  imageWidth = parsed.width;
+  imageHeight = parsed.height;
+  await applySites(sites, { fit: true, warmup: true });
+  setStatus(`Loaded ${sites.length} sites. Render size ${imageWidth}x${imageHeight}.`);
 }
 
 fileInput.addEventListener("change", () => {
-  loadSitesFromInput(fileInput, { label: "A", isPrimary: true }).catch((err) => {
-    setStatus(`Load failed: ${err.message || err}`);
-  });
-});
-fileInputB.addEventListener("change", () => {
-  loadSitesFromInput(fileInputB, { label: "B", isPrimary: false }).catch((err) => {
+  loadSitesFromInput(fileInput).catch((err) => {
     setStatus(`Load failed: ${err.message || err}`);
   });
 });
 renderModeSelect.addEventListener("change", requestRender);
 dotsToggle.addEventListener("change", requestRender);
-interpSlider.addEventListener("input", () => {
-  interpT = Math.min(1, Math.max(0, parseFloat(interpSlider.value || "0")));
-  interpValue.textContent = interpT.toFixed(interpPrecision);
-  if (!canInterpolate()) {
-    return;
-  }
-  scheduleInterpolation();
-});
-interpSlider.addEventListener("pointerdown", () => {
-  if (!canInterpolate()) return;
-  interpActive = true;
-  requestRender();
-});
-window.addEventListener("pointerup", () => {
-  if (!interpActive) return;
-  interpActive = false;
-  interpTailLeft = interpTailFrames;
-  requestRender();
-});
-fitBtn.addEventListener("click", () => {
-  fitView();
-});
-resetBtn.addEventListener("click", () => {
-  resetView();
-});
 exportBtn.addEventListener("click", exportPNG);
-async function deleteSites() {
-  try {
-    await ensureInitialized();
-  } catch (err) {
-    setStatus(`Load failed: ${err.message || err}`);
-    return;
-  }
-  if (selectedSites.size === 0) return;
-
-  setStatus(`Deleting ${selectedSites.size} sites...`);
-  deleteBtn.classList.add("hidden");
-
-  // Deactivate selected sites
-  for (const siteIdx of selectedSites) {
-    if (siteIdx < siteData.length) {
-      siteData[siteIdx][0] = -1.0;
-    }
-  }
-
-  selectedSites.clear();
-  drawOverlay();
-
-  uploadSites(siteData);
-
-  ensureViewCandidates();
-  warmupInFlight = true;
-  try {
-    const viewOverride = {
-      imageWidth,
-      imageHeight,
-      canvasWidth: imageWidth,
-      canvasHeight: imageHeight,
-      panX: 0,
-      panY: 0,
-      zoom: 1.0,
-      renderMode: 0,
-      showDots: false,
-    };
-
-    // Run JFA warmup
-    const allParamBuffers = [];
-    const encoder = device.createCommandEncoder();
-
-    const candW = Math.max(1, Math.ceil(imageWidth / candDownscale));
-    const candH = Math.max(1, Math.ceil(imageHeight / candDownscale));
-    const numJFAFloodPasses = Math.ceil(Math.log2(Math.max(candW, candH)));
-    const numVptPasses = 1;
-
-    let cand0A = textures.cand0A;
-    let cand1A = textures.cand1A;
-    let cand0B = textures.cand0B;
-    let cand1B = textures.cand1B;
-
-    // Clear candidates
-    const clearParams = createParamsBufferForSize(imageWidth, imageHeight, 0, 0,
-                                                 VPT_RADIUS_SCALE, VPT_RADIUS_PROBES, VPT_INJECT_COUNT,
-                                                 candW, candH, candDownscale);
-    allParamBuffers.push(clearParams);
-    const clearA = encoder.beginComputePass();
-    clearA.setPipeline(pipelines.clearPipeline);
-    clearA.setBindGroup(0, device.createBindGroup({
-      layout: pipelines.clearPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: clearParams } },
-        { binding: 1, resource: cand0A.createView() },
-      ],
-    }));
-    clearA.dispatchWorkgroups(Math.ceil(candW / 8), Math.ceil(candH / 8));
-    clearA.end();
-
-    const clearB = encoder.beginComputePass();
-    clearB.setPipeline(pipelines.clearPipeline);
-    clearB.setBindGroup(0, device.createBindGroup({
-      layout: pipelines.clearPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: clearParams } },
-        { binding: 1, resource: cand1A.createView() },
-      ],
-    }));
-    clearB.dispatchWorkgroups(Math.ceil(candW / 8), Math.ceil(candH / 8));
-    clearB.end();
-
-    // Update view buffer
-    writeViewBufferData(buffers.updateViewBuffer, viewOverride);
-
-    // Seed JFA
-    const seedParams = createParamsBufferForSize(imageWidth, imageHeight, 0, 0,
-                                                VPT_RADIUS_SCALE, VPT_RADIUS_PROBES, VPT_INJECT_COUNT,
-                                                candW, candH, candDownscale);
-    allParamBuffers.push(seedParams);
-    const seedPass = encoder.beginComputePass();
-    seedPass.setPipeline(pipelines.seedPipeline);
-    seedPass.setBindGroup(0, device.createBindGroup({
-      layout: pipelines.seedPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: buffers.siteBuffer } },
-        { binding: 1, resource: { buffer: seedParams } },
-        { binding: 3, resource: cand0A.createView() },
-        { binding: 4, resource: cand0B.createView() },
-      ],
-    }));
-    seedPass.dispatchWorkgroups(Math.ceil(siteCount / 64));
-    seedPass.end();
-
-    [cand0A, cand0B] = [cand0B, cand0A];
-
-    // JFA flood passes
-    let floodSrc = cand0A;
-    let floodDst = cand0B;
-    for (let fp = 0; fp < numJFAFloodPasses; fp++) {
-      const stepSize = 1 << (numJFAFloodPasses - 1 - fp);
-      const floodParams = createParamsBufferForSize(imageWidth, imageHeight, stepSize, 0,
-                                                   VPT_RADIUS_SCALE, VPT_RADIUS_PROBES, VPT_INJECT_COUNT,
-                                                   candW, candH, candDownscale);
-      allParamBuffers.push(floodParams);
-
-      const floodPass = encoder.beginComputePass();
-      floodPass.setPipeline(pipelines.floodPipeline);
-      floodPass.setBindGroup(0, device.createBindGroup({
-        layout: pipelines.floodPipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: buffers.siteBuffer } },
-          { binding: 1, resource: { buffer: floodParams } },
-          { binding: 3, resource: floodSrc.createView() },
-          { binding: 4, resource: floodDst.createView() },
-        ],
-      }));
-      floodPass.dispatchWorkgroups(Math.ceil(candW / 8), Math.ceil(candH / 8));
-      floodPass.end();
-
-      [floodSrc, floodDst] = [floodDst, floodSrc];
-    }
-
-    // After flood, result is in floodSrc. Ensure it's in cand0A
-    if (numJFAFloodPasses % 2 === 1) {
-      [cand0A, cand0B] = [cand0B, cand0A];
-    }
-
-    for (let warmupPass = 0; warmupPass < numVptPasses; warmupPass++) {
-      const hilbertBuffers = getHilbertBuffers();
-      const vptStep = packJumpStep(warmupPass, candW, candH);
-      const vptSeed = (warmupPass >>> 16);
-      const vptParams = createParamsBufferForSize(imageWidth, imageHeight, vptStep, vptSeed,
-                                                 VPT_RADIUS_SCALE, VPT_RADIUS_PROBES, VPT_INJECT_COUNT,
-                                                 candW, candH, candDownscale);
-      allParamBuffers.push(vptParams);
-      const vptPass = encoder.beginComputePass();
-      vptPass.setPipeline(pipelines.updatePipeline);
-      vptPass.setBindGroup(0, device.createBindGroup({
-        layout: pipelines.updatePipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: buffers.packedSitesBuffer } },
-          { binding: 1, resource: { buffer: vptParams } },
-          { binding: 2, resource: cand0A.createView() },
-          { binding: 3, resource: cand1A.createView() },
-          { binding: 4, resource: cand0B.createView() },
-          { binding: 5, resource: cand1B.createView() },
-          { binding: 6, resource: { buffer: hilbertBuffers.order } },
-          { binding: 7, resource: { buffer: hilbertBuffers.pos } },
-        ],
-      }));
-      vptPass.dispatchWorkgroups(Math.ceil(candW / 16), Math.ceil(candH / 16));
-      vptPass.end();
-
-      [cand0A, cand0B] = [cand0B, cand0A];
-      [cand1A, cand1B] = [cand1B, cand1A];
-    }
-
-    textures.finalCand0 = cand0A;
-    textures.finalCand1 = cand1A;
-
-    device.queue.submit([encoder.finish()]);
-
-    await device.queue.onSubmittedWorkDone();
-    allParamBuffers.forEach(b => b.destroy());
-  } finally {
-    warmupInFlight = false;
-  }
-
-  syncCandidateState();
-  jumpPassIndex = 0;
-  pendingUpdates = 0;
-  updateViewBuffer();
-  setStatus(`Deleted sites. Recomputed JFA + 16 VPT iterations.`);
-  requestRender();
-}
-
-deleteBtn.addEventListener("click", deleteSites);
-
-window.addEventListener("keydown", (event) => {
-  if ((event.key === "Backspace" || event.key === "Delete") && selectedSites.size > 0) {
-    event.preventDefault();
-    deleteSites();
-  } else if (event.key === "Escape" && selectedSites.size > 0) {
-    selectedSites.clear();
-    deleteBtn.classList.add("hidden");
-    drawOverlay();
-  }
-});
 
 async function exportPNG() {
   try {
@@ -1809,13 +1215,12 @@ window.viewer = {
   get siteCount() { return siteCount; },
   get imageWidth() { return imageWidth; },
   get imageHeight() { return imageHeight; },
-  setDimensions(w, h) { imageWidth = w; imageHeight = h; markCandidatesDirty(); },
+  setDimensions(w, h) { imageWidth = w; imageHeight = h; requestRender(); },
   setSiteCount(n) { siteCount = n; },
   createCandidateTextures,
   warmUpCandidates,
   uploadSites,
   setTextures(t) { textures = t; },
-  invalidateCandidates() { markCandidatesDirty(); },
 };
 
 initPromise = initWebGPU().catch((err) => {

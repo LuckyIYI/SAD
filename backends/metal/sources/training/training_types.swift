@@ -41,7 +41,6 @@ struct TrainingOptions {
     var candInjectCount: UInt32
     var candHilbertWindow: UInt32
     var candHilbertProbes: UInt32
-    var exportCandPasses: Int?
 
     var lrScale: Float
     var lrPosBase: Float
@@ -63,7 +62,7 @@ struct TrainingOptions {
     var traceFrame: Int?
 
     var outputDir: String
-    var exportNeighbors: Bool
+    var includeDebugMasks: Bool
     var packedPSNR: Bool
 }
 

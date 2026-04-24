@@ -295,7 +295,6 @@ func makeTrainingBuffers(device: MTLDevice,
 struct RenderTextures {
     let render: MTLTexture
     let voronoi: MTLTexture
-    let centroids: MTLTexture
     let tauHeatmap: MTLTexture
 }
 
@@ -311,7 +310,6 @@ func makeRenderTextures(device: MTLDevice, width: Int, height: Int) -> RenderTex
     return RenderTextures(
         render: device.makeTexture(descriptor: renderDesc)!,
         voronoi: device.makeTexture(descriptor: renderDesc)!,
-        centroids: device.makeTexture(descriptor: renderDesc)!,
         tauHeatmap: device.makeTexture(descriptor: renderDesc)!
     )
 }

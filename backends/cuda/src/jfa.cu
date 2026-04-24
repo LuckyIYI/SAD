@@ -111,8 +111,8 @@ __global__ void jfaFloodKernel(
     if (x >= width || y >= height) return;
     
     int pixelIdx = y * width + x;
-    float2 uv = make_float2((float(x) + 0.5f) * float(candDownscale),
-                            (float(y) + 0.5f) * float(candDownscale));
+    float2 uv = make_float2(float(x) * float(candDownscale),
+                            float(y) * float(candDownscale));
     float2 maxUv = make_float2(float(targetWidth - 1), float(targetHeight - 1));
     uv.x = fminf(uv.x, maxUv.x);
     uv.y = fminf(uv.y, maxUv.y);
@@ -304,8 +304,8 @@ __global__ void updateCandidatesKernel(
     if (jumpStep == 0u) jumpStep = 1u;
     uint32_t fullStepIndex = (stepHigh << 16) | stepIndex;
     
-    float2 uv = make_float2((float(x) + 0.5f) * float(candDownscale),
-                            (float(y) + 0.5f) * float(candDownscale));
+    float2 uv = make_float2(float(x) * float(candDownscale),
+                            float(y) * float(candDownscale));
     float2 maxUv = make_float2(float(targetWidth - 1), float(targetHeight - 1));
     uv.x = fminf(uv.x, maxUv.x);
     uv.y = fminf(uv.y, maxUv.y);

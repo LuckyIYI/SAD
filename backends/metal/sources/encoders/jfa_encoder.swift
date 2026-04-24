@@ -115,9 +115,8 @@ final class JFAEncoder {
         }
 
         // --- Ensure result ends up in cand0 ---
-        // After numPasses flood iterations, if numPasses is even, result is in cand1
-        // We need to copy back to cand0
-        if numPasses % 2 == 0 {
+        // The first flood pass writes cand1, so odd pass counts finish in cand1.
+        if numPasses % 2 == 1 {
             // Result is in cand1, copy to cand0
             if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
                 blitEncoder.label = "JFA Copy Result"

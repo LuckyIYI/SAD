@@ -680,7 +680,7 @@ static std::string fixedFloat(float value, int precision) {
 static void printUsage(const Defaults& defaults) {
     std::cout << "Usage:\n";
     std::cout << "  sad_cuda <image_path> [options]\n";
-    std::cout << "  sad_cuda --render <sites.(json|txt)> [options]\n\n";
+    std::cout << "  sad_cuda --render <sites.txt> [options]\n\n";
     std::cout << "Common options:\n";
     std::cout << "  --help, -h            Show this help\n";
     std::cout << "  --out-dir <path>      Output directory (default: results)\n\n";
@@ -1920,9 +1920,6 @@ static void trainVoronoi(const TrainingOptions& input) {
                 site.position.y *= scaleY;
             }
         }
-        for (auto& site : hostSites) {
-            site.log_tau = options.initLogTau;
-        }
     } else if (options.initMode == InitMode::PerPixel) {
         hostSites.reserve(static_cast<size_t>(numPixels));
         for (int y = 0; y < height; ++y) {
@@ -2072,9 +2069,11 @@ static void trainVoronoi(const TrainingOptions& input) {
     cudaStream_t stream = nullptr;
     cudaStream_t candStream = nullptr;
     cudaEvent_t candDone = nullptr;
+    cudaEvent_t sitesReady = nullptr;
     CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     CUDA_CHECK(cudaStreamCreateWithFlags(&candStream, cudaStreamNonBlocking));
     CUDA_CHECK(cudaEventCreateWithFlags(&candDone, cudaEventDisableTiming));
+    CUDA_CHECK(cudaEventCreateWithFlags(&sitesReady, cudaEventDisableTiming));
 
     if (options.initMode == InitMode::GradientWeighted) {
         DeviceBuffer<uint32_t> seedCounter;
@@ -2110,6 +2109,7 @@ static void trainVoronoi(const TrainingOptions& input) {
     launchJFASeed(cand0A.ptr, d_sites.ptr, nSitesU,
                   candWidth, candHeight, candDownscale, stream);
     cudaSync("initCandidates");
+    CUDA_CHECK(cudaEventRecord(sitesReady, stream));
 
     std::cout << "Logs | Iter | PSNR | Active | speed | elapsed" << std::endl;
     auto startTime = std::chrono::steady_clock::now();
@@ -2143,19 +2143,48 @@ static void trainVoronoi(const TrainingOptions& input) {
     uint32_t* candAsync0B = cand0B.ptr;
     uint32_t* candAsync1B = cand1B.ptr;
     bool pendingCandSwap = false;
+    auto applyPendingCandidates = [&]() {
+        if (!pendingCandSwap) {
+            return;
+        }
+        CUDA_CHECK(cudaStreamWaitEvent(stream, candDone, 0));
+        cand0A.ptr = candAsync0A;
+        cand1A.ptr = candAsync1A;
+        cand0B.ptr = candAsync0B;
+        cand1B.ptr = candAsync1B;
+        pendingCandSwap = false;
+    };
 
     for (int iter = 0; iter < options.iterations; ++iter) {
         CandidateUpdatePlan cup = candidateUpdatePlan(iter, options, effectivePruneStart);
+        bool shouldUpdateCandidates = cup.shouldUpdate;
+        int candidatePasses = cup.passes;
+        int desiredSplits = std::max(0, static_cast<int>(activeSitesEstimate * options.densifyPercentile));
+        bool shouldDensify = options.densifyEnabled &&
+            iter >= options.densifyStart &&
+            iter <= options.densifyEnd &&
+            (iter % std::max(1, options.densifyFreq) == 0) &&
+            actualNSites < plan.bufferCapacity &&
+            desiredSplits > 0;
+        bool shouldUpdateSynchronously = shouldDensify;
 
-        // Launch candidate updates ASYNC on candStream with local pointer tracking
-        if (cup.shouldUpdate && cup.passes > 0) {
+        // Candidate updates read the mutable site buffer on a side stream. Keep
+        // them async in the common case, but synchronize on densify iterations so
+        // topology changes use the same updated candidate field as other backends.
+        if (shouldUpdateCandidates && candidatePasses > 0) {
             const uint32_t* hilbertOrder = nullptr;
             const uint32_t* hilbertPos = nullptr;
             uint32_t hilbertProbes = 0;
             uint32_t hilbertWindow = 0;
+            cudaStream_t updateStream = shouldUpdateSynchronously ? stream : candStream;
+            if (!shouldUpdateSynchronously) {
+                CUDA_CHECK(cudaStreamWaitEvent(candStream, sitesReady, 0));
+            } else {
+                applyPendingCandidates();
+            }
             if (usesVptHilbert) {
                 if (!vptHilbert.ready || vptHilbert.siteCount != nSitesU) {
-                    updateHilbertBuffersGPU(vptHilbert, d_sites.ptr, nSitesU, width, height, candStream);
+                    updateHilbertBuffersGPU(vptHilbert, d_sites.ptr, nSitesU, width, height, updateStream);
                     vptHilbert.ready = true;
                     vptHilbert.siteCount = nSitesU;
                 }
@@ -2164,12 +2193,12 @@ static void trainVoronoi(const TrainingOptions& input) {
                 hilbertProbes = options.candHilbertProbes;
                 hilbertWindow = options.candHilbertWindow;
             }
-            launchPackCandidateSites(d_sites.ptr, packedCandidates.ptr, nSitesU, candStream);
+            launchPackCandidateSites(d_sites.ptr, packedCandidates.ptr, nSitesU, updateStream);
             // Use local copies so swaps don't affect main pointers during async execution
-            uint32_t* localCand0A = candAsync0A;
-            uint32_t* localCand1A = candAsync1A;
-            uint32_t* localCand0B = candAsync0B;
-            uint32_t* localCand1B = candAsync1B;
+            uint32_t* localCand0A = shouldUpdateSynchronously ? cand0A.ptr : candAsync0A;
+            uint32_t* localCand1A = shouldUpdateSynchronously ? cand1A.ptr : candAsync1A;
+            uint32_t* localCand0B = shouldUpdateSynchronously ? cand0B.ptr : candAsync0B;
+            uint32_t* localCand1B = shouldUpdateSynchronously ? cand1B.ptr : candAsync1B;
             updateCandidates(localCand0A, localCand1A, localCand0B, localCand1B,
                              packedCandidates.ptr, nSitesU,
                              candWidth, candHeight, width, height, candDownscale, invScaleSq,
@@ -2177,25 +2206,28 @@ static void trainVoronoi(const TrainingOptions& input) {
                              options.candRadiusProbes,
                              options.candInjectCount,
                              hilbertOrder, hilbertPos, hilbertProbes, hilbertWindow,
-                             cup.passes,
+                             candidatePasses,
                              jumpPassIndex,
-                             candStream);
+                             updateStream);
             // After updateCandidates swaps internally, final data is in localCand0A/1A
-            candAsync0A = localCand0A;
-            candAsync1A = localCand1A;
-            candAsync0B = localCand0B;
-            candAsync1B = localCand1B;
-            CUDA_CHECK(cudaEventRecord(candDone, candStream));
-            pendingCandSwap = true;
+            if (shouldUpdateSynchronously) {
+                cand0A.ptr = localCand0A;
+                cand1A.ptr = localCand1A;
+                cand0B.ptr = localCand0B;
+                cand1B.ptr = localCand1B;
+                candAsync0A = cand0A.ptr;
+                candAsync1A = cand1A.ptr;
+                candAsync0B = cand0B.ptr;
+                candAsync1B = cand1B.ptr;
+            } else {
+                candAsync0A = localCand0A;
+                candAsync1A = localCand1A;
+                candAsync0B = localCand0B;
+                candAsync1B = localCand1B;
+                CUDA_CHECK(cudaEventRecord(candDone, candStream));
+                pendingCandSwap = true;
+            }
         }
-
-        int desiredSplits = std::max(0, static_cast<int>(activeSitesEstimate * options.densifyPercentile));
-        bool shouldDensify = options.densifyEnabled &&
-            iter >= options.densifyStart &&
-            iter <= options.densifyEnd &&
-            (iter % std::max(1, options.densifyFreq) == 0) &&
-            actualNSites < plan.bufferCapacity &&
-            desiredSplits > 0;
 
         if (shouldDensify && plan.densifyEnabled && plan.needsPairs) {
             // Clear stats buffers before computing (matching Metal algorithm)
@@ -2307,15 +2339,7 @@ static void trainVoronoi(const TrainingOptions& input) {
             float blend = float(iter) / float(std::max(1, options.iterations));
             float lambda = tauDiffuseLambda * (0.1f + 0.9f * blend);
 
-            // Wait for async candidates and apply updated pointers
-            if (pendingCandSwap) {
-                CUDA_CHECK(cudaStreamWaitEvent(stream, candDone, 0));
-                cand0A.ptr = candAsync0A;
-                cand1A.ptr = candAsync1A;
-                cand0B.ptr = candAsync0B;
-                cand1B.ptr = candAsync1B;
-                pendingCandSwap = false;
-            }
+            applyPendingCandidates();
 
             // Start from grad_log_tau (not tauGradRaw), matching Metal algorithm
             float* currentIn = grad_log_tau.ptr;
@@ -2336,12 +2360,7 @@ static void trainVoronoi(const TrainingOptions& input) {
             // No writeback needed - diffusion modifies grad_log_tau in-place
         } else if (pendingCandSwap) {
             // If no tau diffusion, wait before Adam to ensure candidates complete
-            CUDA_CHECK(cudaStreamWaitEvent(stream, candDone, 0));
-            cand0A.ptr = candAsync0A;
-            cand1A.ptr = candAsync1A;
-            cand0B.ptr = candAsync0B;
-            cand1B.ptr = candAsync1B;
-            pendingCandSwap = false;
+            applyPendingCandidates();
         }
 
         float lrDir = lrDirBase;
@@ -2398,6 +2417,7 @@ static void trainVoronoi(const TrainingOptions& input) {
                 activeSitesEstimate = std::max(0, activeSitesEstimate - numToPrune);
             }
         }
+        CUDA_CHECK(cudaEventRecord(sitesReady, stream));
 
         bool shouldLog = (iter % options.logFreq == 0) || (iter == options.iterations - 1);
         if (shouldLog) {
@@ -2460,36 +2480,7 @@ static void trainVoronoi(const TrainingOptions& input) {
 
     auto trainEndTime = std::chrono::steady_clock::now();
     float trainTime = std::chrono::duration<float>(trainEndTime - startTime).count();
-
-    // Refresh candidates for final render (matching Metal algorithm)
-    int finalCandPasses = std::max(1, options.candUpdatePasses);
-    if (finalCandPasses > 0) {
-        const uint32_t* hilbertOrder = nullptr;
-        const uint32_t* hilbertPos = nullptr;
-        uint32_t hilbertProbes = 0;
-        uint32_t hilbertWindow = 0;
-        if (usesVptHilbert) {
-            if (!vptHilbert.ready || vptHilbert.siteCount != nSitesU) {
-                updateHilbertBuffersGPU(vptHilbert, d_sites.ptr, nSitesU, width, height, stream);
-                vptHilbert.ready = true;
-                vptHilbert.siteCount = nSitesU;
-            }
-            hilbertOrder = vptHilbert.order.ptr;
-            hilbertPos = vptHilbert.pos.ptr;
-            hilbertProbes = options.candHilbertProbes;
-            hilbertWindow = options.candHilbertWindow;
-        }
-        launchPackCandidateSites(d_sites.ptr, packedCandidates.ptr, nSitesU, stream);
-        updateCandidates(cand0A.ptr, cand1A.ptr, cand0B.ptr, cand1B.ptr,
-                         packedCandidates.ptr, nSitesU,
-                         candWidth, candHeight, width, height, candDownscale, invScaleSq,
-                         options.candRadiusScale, options.candRadiusProbes,
-                         options.candInjectCount,
-                         hilbertOrder, hilbertPos, hilbertProbes, hilbertWindow,
-                         finalCandPasses,
-                         jumpPassIndex, stream);
-        cudaSync("finalCandRefresh");
-    }
+    applyPendingCandidates();
 
     launchRenderVoronoi(
         cand0A.ptr, cand1A.ptr,
@@ -2536,6 +2527,7 @@ static void trainVoronoi(const TrainingOptions& input) {
 
     // Cleanup streams
     CUDA_CHECK(cudaEventDestroy(candDone));
+    CUDA_CHECK(cudaEventDestroy(sitesReady));
     CUDA_CHECK(cudaStreamDestroy(candStream));
     CUDA_CHECK(cudaStreamDestroy(stream));
 }

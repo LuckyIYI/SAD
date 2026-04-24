@@ -8,7 +8,6 @@ Project page: https://luckyiyi.github.io/SAD/
 
 ```bash
 ./run.sh /path/to/image.png
-./run.sh
 ./run.sh /path/to/image.png --backend auto
 ./run.sh /path/to/image.png --backend metal
 ./run.sh /path/to/image.png --backend cuda
@@ -19,7 +18,9 @@ Project page: https://luckyiyi.github.io/SAD/
 Backend options: `auto`, `metal`, `wgpu`, `cuda`, `pytorch`.
 Compatibility note: `--backend webgpu` is still accepted and maps to `wgpu`.
 Default training targets `DEFAULT_TARGET_BPP=1.0` from `training_config.json`; pass `--target-bpp` to override it.
-If no image path is passed, `run.sh` uses the included `test.png` smoke-test image.
+Pass an image path explicitly; `run.sh` only uses `test.png` when that file exists at the repo root.
+Default training output is intentionally small: a reconstruction PNG and a `*_sites.txt` file.
+Metal can also write debug cells and tau heatmaps with `--include-debug-mask`.
 
 ## Install
 
@@ -52,7 +53,7 @@ Notes:
 
 ## Render From Saved Sites
 
-All backends support render-only mode from a saved `*_sites.txt` or `*.json`:
+All backends support render-only mode from a saved `*_sites.txt`:
 
 ```bash
 ./run.sh --render /path/to/sites.txt --backend metal
@@ -64,14 +65,13 @@ All backends support render-only mode from a saved `*_sites.txt` or `*.json`:
 Metal also has a convenience script:
 
 ```bash
-./render.sh results/foo_sites.json
 ./render.sh results/foo_sites.txt --width 1024 --height 1024
 ```
 
 ## Viewer
 
 Open `backends/webgpu_js/index.html` in a WebGPU-capable browser, load a `*_sites.txt`,
-set width/height, and inspect the forward pass with debug overlays.
+and inspect the forward pass with render modes, optional site dots, and PNG export.
 
 ## Browser Demo
 

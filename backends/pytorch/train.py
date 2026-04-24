@@ -446,7 +446,6 @@ def _pack_jump_step(step_index: int, width: int, height: int) -> int:
     jump_step = min(_jump_step_for_index(step_index, width, height), 0xFFFF)
     return (jump_step << 16) | (step_index & 0xFFFF)
 
-
 def _hilbert_bits_for_size(width: int, height: int) -> int:
     max_dim = max(width, height)
     n = 1
@@ -678,7 +677,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="PyTorch SAD training (GPU kernels).")
     parser.add_argument("image", nargs="?", help="Target image path")
     parser.add_argument("--render", dest="render_sites", default=None,
-                        help="Render from a saved sites file (.txt or .json)")
+                        help="Render from a saved sites TXT file")
     parser.add_argument("--out", dest="render_out", default=None)
     parser.add_argument("--width", type=int, default=0)
     parser.add_argument("--height", type=int, default=0)
@@ -746,8 +745,6 @@ def main() -> None:
 
     parser.add_argument("--ssim", dest="ssim_metric", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ssim-weight", type=float, default=0.0)
-    parser.add_argument("--export-neighbors", action="store_true")
-    parser.add_argument("--export-cand-passes", type=int, default=0)
     parser.add_argument("--packed-psnr", action="store_true")
     parser.add_argument("--trace-frame", type=int, default=None)
     parser.add_argument("--show-viewer", action="store_true")
@@ -1204,37 +1201,6 @@ def main() -> None:
 
     train_time = time.time() - start_time
 
-    # Final candidate refresh (optional)
-    final_cand_passes = int(args.export_cand_passes) if args.export_cand_passes > 0 else max(1, int(args.cand_passes))
-    if final_cand_passes > 0:
-        vops.pack_candidate_sites(sites_padded, packed_sites, int(actual_sites))
-        for _ in range(final_cand_passes):
-            step = _pack_jump_step(jump_pass_index, cand_width, cand_height)
-            step_high = jump_pass_index >> 16
-            vops.update_candidates_compact(
-                cand0A, cand1A, cand0B, cand1B,
-                packed_sites,
-                hilbert_order if uses_hilbert and hilbert_order is not None else dummy_hilbert,
-                hilbert_pos if uses_hilbert and hilbert_pos is not None else dummy_hilbert,
-                float(inv_scale_sq),
-                int(actual_sites),
-                int(step),
-                int(step_high),
-                float(args.cand_radius_scale),
-                int(args.cand_radius_probes),
-                int(args.cand_inject),
-                int(args.cand_hilbert_probes if uses_hilbert else 0),
-                int(args.cand_hilbert_window if uses_hilbert else 0),
-                int(cand_scale),
-                int(width),
-                int(height),
-                int(cand_width),
-                int(cand_height),
-            )
-            cand0A, cand0B = cand0B, cand0A
-            cand1A, cand1B = cand1B, cand1A
-            jump_pass_index += 1
-
     # Final render for output
     render_rgba = vops.render_sad_padded(
         cand0A, cand1A, sites_padded, float(inv_scale_sq),
@@ -1250,12 +1216,16 @@ def main() -> None:
     final_img = (render_img * 255.0).to(torch.uint8).numpy()
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(final_img).save(out_dir / "final.png")
-    save_sites_txt(out_dir / "sites.txt", sites, width, height)
+    base = Path(args.image).stem
+    image_path = out_dir / f"{base}.png"
+    sites_path = out_dir / f"{base}_sites.txt"
+    Image.fromarray(final_img).save(image_path)
+    save_sites_txt(sites_path, sites, width, height)
 
     print(f"Final PSNR: {final_psnr:.2f} dB (best: {best_psnr:.2f} dB)")
 
-    print(f"Saved final render + sites to {out_dir}")
+    print(f"Saved: {image_path}")
+    print(f"Saved: {sites_path}")
     total_time = time.time() - start_time
     print(f"Training time: {train_time:.2f} s")
     print(f"Total time: {total_time:.2f} s")

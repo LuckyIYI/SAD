@@ -359,7 +359,7 @@ export function packJumpStep(stepIndex, width, height) {
   const stages = 32 - Math.clz32(pow2) - 1;
   let stage;
   if (stages <= 0) stage = 0;
-  else stage = stepIndex >= stages ? stages - 1 : stepIndex;
+  else stage = Math.min(stepIndex, stages - 1);
   let step = pow2 >> (stage + 1);
   step = Math.max(step, 1);
   step = Math.min(step, 0xffff);

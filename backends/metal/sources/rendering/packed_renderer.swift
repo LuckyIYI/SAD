@@ -19,7 +19,7 @@ func renderPackedInference(packedSites: [PackedInferenceSite],
                            device: MTLDevice,
                            commandQueue: MTLCommandQueue,
                            library: MTLLibrary,
-                           params: PackedRenderParams) -> (render: MTLTexture, voronoi: MTLTexture?, centroids: MTLTexture)? {
+                           params: PackedRenderParams) -> (render: MTLTexture, voronoi: MTLTexture?)? {
     guard !packedSites.isEmpty else {
         print("No active sites to render (packed inference).")
         return nil
@@ -48,10 +48,8 @@ func renderPackedInference(packedSites: [PackedInferenceSite],
     renderDesc.storageMode = .shared
     let renderTexture = device.makeTexture(descriptor: renderDesc)!
     let voronoiTexture = device.makeTexture(descriptor: renderDesc)!
-    let centroidsTexture = device.makeTexture(descriptor: renderDesc)!
 
     let invScaleSq = 1.0 as Float / (Float(max(width, height)) * Float(max(width, height)))
-    let centroidRadius: Float = 2.0
     let nSitesU = UInt32(packedSites.count)
 
     guard let commandBuffer = commandQueue.makeCommandBuffer() else { return nil }
@@ -81,7 +79,7 @@ func renderPackedInference(packedSites: [PackedInferenceSite],
         var passIndex: UInt32 = 0
         for round in 0..<rounds {
             if params.useJFA, let jfa = packedJFAEncoder {
-                jfa.encodeJFA(cand0: candidates.cand0A, cand1: candidates.cand0B,
+                jfa.encodeJFA(cand0: candidates.cand0A, cand1: candidates.cand1A,
                               sitesBuffer: sitesBuffer, quant: quant, siteCount: nSitesU,
                               invScaleSq: invScaleSq,
                               candDownscale: UInt32(max(1, params.candDownscale)),
@@ -122,12 +120,6 @@ func renderPackedInference(packedSites: [PackedInferenceSite],
                                      invScaleSq: invScaleSq, siteCount: nSitesU,
                                      in: renderBuffer)
 
-    packedRenderEncoder.encodeCentroids(cand0: candidates.cand0A, cand1: candidates.cand1A,
-                                        output: centroidsTexture,
-                                        sitesBuffer: sitesBuffer, quant: quant,
-                                        dotRadius: centroidRadius, siteCount: nSitesU,
-                                        in: renderBuffer)
-
     if params.outputVoronoi {
         packedRenderEncoder.encodeColoring(cand0: candidates.cand0A, cand1: candidates.cand1A,
                                            output: voronoiTexture,
@@ -139,7 +131,7 @@ func renderPackedInference(packedSites: [PackedInferenceSite],
     renderBuffer.commit()
     renderBuffer.waitUntilCompleted()
 
-    return (renderTexture, params.outputVoronoi ? voronoiTexture : nil, centroidsTexture)
+    return (renderTexture, params.outputVoronoi ? voronoiTexture : nil)
 }
 
 func renderPackedWithCandidates(cand0: MTLTexture,
@@ -149,7 +141,7 @@ func renderPackedWithCandidates(cand0: MTLTexture,
                                 device: MTLDevice,
                                 commandQueue: MTLCommandQueue,
                                 library: MTLLibrary,
-                                outputVoronoi: Bool) -> (render: MTLTexture, voronoi: MTLTexture?, centroids: MTLTexture)? {
+                                outputVoronoi: Bool) -> (render: MTLTexture, voronoi: MTLTexture?)? {
     guard !packedSites.isEmpty else {
         print("No sites to render (packed inference).")
         return nil
@@ -172,10 +164,8 @@ func renderPackedWithCandidates(cand0: MTLTexture,
     renderDesc.storageMode = .shared
     let renderTexture = device.makeTexture(descriptor: renderDesc)!
     let voronoiTexture = device.makeTexture(descriptor: renderDesc)!
-    let centroidsTexture = device.makeTexture(descriptor: renderDesc)!
 
     let invScaleSq = 1.0 as Float / (Float(max(width, height)) * Float(max(width, height)))
-    let centroidRadius: Float = 2.0
     let nSitesU = UInt32(packedSites.count)
 
     guard let renderBuffer = commandQueue.makeCommandBuffer() else { return nil }
@@ -185,12 +175,6 @@ func renderPackedWithCandidates(cand0: MTLTexture,
                                      sitesBuffer: sitesBuffer, quant: quant,
                                      invScaleSq: invScaleSq, siteCount: nSitesU,
                                      in: renderBuffer)
-
-    packedRenderEncoder.encodeCentroids(cand0: cand0, cand1: cand1,
-                                        output: centroidsTexture,
-                                        sitesBuffer: sitesBuffer, quant: quant,
-                                        dotRadius: centroidRadius, siteCount: nSitesU,
-                                        in: renderBuffer)
 
     if outputVoronoi {
         packedRenderEncoder.encodeColoring(cand0: cand0, cand1: cand1,
@@ -203,5 +187,5 @@ func renderPackedWithCandidates(cand0: MTLTexture,
     renderBuffer.commit()
     renderBuffer.waitUntilCompleted()
 
-    return (renderTexture, outputVoronoi ? voronoiTexture : nil, centroidsTexture)
+    return (renderTexture, outputVoronoi ? voronoiTexture : nil)
 }

@@ -482,7 +482,6 @@ def simulate_final_sites(init_sites, max_sites, iters, densify_enabled, densify_
     effective_prune_start = prune_start
     if densify_enabled and not prune_during_densify and prune_start < densify_end:
         effective_prune_start = densify_end
-
     for it in range(iters):
         if (densify_enabled and densify_percentile > 0.0 and it >= densify_start and
                 it <= densify_end and (it % densify_freq == 0) and actual_sites < max_sites):
@@ -735,6 +734,9 @@ def render_from_sites(args) -> None:
     if cand_downscale > 1:
         print(f"Candidate downscale: {cand_downscale}x -> {cand_width}x{cand_height}")
 
+    cand_radius_scale = float(args.cand_radius_scale)
+    cand_radius_probes = max(0, int(args.cand_radius_probes))
+    cand_inject_count = max(0, int(args.cand_inject_count))
     cand_hilbert_window = max(0, args.cand_hilbert_window)
     cand_hilbert_probes = max(0, args.cand_hilbert_probes)
     uses_hilbert = cand_hilbert_window > 0 and cand_hilbert_probes > 0
@@ -773,9 +775,9 @@ def render_from_sites(args) -> None:
         site_count,
         step=0,
         seed=0,
-        radius_scale=CAND_RADIUS_SCALE,
-        radius_probes=CAND_RADIUS_PROBES,
-        inject_count=CAND_INJECT_COUNT,
+        radius_scale=cand_radius_scale,
+        radius_probes=cand_radius_probes,
+        inject_count=cand_inject_count,
         hilbert_probes=cand_hilbert_probes if uses_hilbert else 0,
         hilbert_window=cand_hilbert_window if uses_hilbert else 0,
         cand_downscale=cand_downscale,
@@ -820,9 +822,9 @@ def render_from_sites(args) -> None:
         site_count,
         0,
         0,
-        radius_scale=CAND_RADIUS_SCALE,
-        radius_probes=CAND_RADIUS_PROBES,
-        inject_count=CAND_INJECT_COUNT,
+        radius_scale=cand_radius_scale,
+        radius_probes=cand_radius_probes,
+        inject_count=cand_inject_count,
         hilbert_probes=cand_hilbert_probes if uses_hilbert else 0,
         hilbert_window=cand_hilbert_window if uses_hilbert else 0,
         cand_downscale=cand_downscale,
@@ -918,9 +920,9 @@ def render_from_sites(args) -> None:
                     site_count,
                     step_size,
                     0,
-                    radius_scale=CAND_RADIUS_SCALE,
-                    radius_probes=CAND_RADIUS_PROBES,
-                    inject_count=CAND_INJECT_COUNT,
+                    radius_scale=cand_radius_scale,
+                    radius_probes=cand_radius_probes,
+                    inject_count=cand_inject_count,
                     hilbert_probes=cand_hilbert_probes if uses_hilbert else 0,
                     hilbert_window=cand_hilbert_window if uses_hilbert else 0,
                     cand_downscale=cand_downscale,
@@ -958,9 +960,9 @@ def render_from_sites(args) -> None:
                 site_count,
                 step_val,
                 step_high,
-                radius_scale=CAND_RADIUS_SCALE,
-                radius_probes=CAND_RADIUS_PROBES,
-                inject_count=CAND_INJECT_COUNT,
+                radius_scale=cand_radius_scale,
+                radius_probes=cand_radius_probes,
+                inject_count=cand_inject_count,
                 hilbert_probes=cand_hilbert_probes if uses_hilbert else 0,
                 hilbert_window=cand_hilbert_window if uses_hilbert else 0,
                 cand_downscale=cand_downscale,
@@ -1084,9 +1086,9 @@ def main():
     parser.add_argument("--log-freq", type=int, default=1000)
     parser.add_argument("--mask", default=None, help="Optional mask image (white=keep, black=ignore)")
     parser.add_argument("--init-from-sites", default=None,
-                        help="Initialize from sites file (.txt or .json), overrides --sites")
+                        help="Initialize from sites TXT file, overrides --sites")
     parser.add_argument("--render", dest="render_sites", default=None,
-                        help="Render from sites file (.txt or .json)")
+                        help="Render from sites TXT file")
     parser.add_argument("--out", dest="render_out", default=None,
                         help="Output PNG path for --render")
     parser.add_argument("--width", type=int, default=0, help="Render width (optional)")
@@ -1782,76 +1784,11 @@ def main():
         active_estimate = post_active
 
     train_time = time.time() - train_start
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
     results_dir = args.out_dir
     os.makedirs(results_dir, exist_ok=True)
-    out_image = os.path.join(results_dir, f"wgpu_{timestamp}.png")
-    out_sites = os.path.join(results_dir, f"wgpu_{timestamp}_sites.txt")
-
-    final_candidate_passes = cand_update_passes
-    if final_candidate_passes > 0:
-        if uses_hilbert:
-            if hilbert_encoder is None or hilbert_resources is None or hilbert_params_buf is None:
-                raise RuntimeError("Hilbert resources are not initialized.")
-            encoder = device.create_command_encoder()
-            update_hilbert_buffers(
-                device,
-                encoder,
-                hilbert_encoder,
-                hilbert_resources,
-                hilbert_params_buf,
-                sites_buffer,
-                actual_sites,
-                width,
-                height,
-            )
-            device.queue.submit([encoder.finish()])
-            hilbert_resources.ready = True
-            hilbert_resources.site_count = actual_sites
-
-        for pass_idx in range(final_candidate_passes):
-            step = pack_jump_step(jump_pass_index + pass_idx, cand_width, cand_height)
-            step_high = ((jump_pass_index + pass_idx) >> 16) & 0xFFFF
-            update_params_buffer(
-                device.queue,
-                cand_params_buffers[pass_idx],
-                width,
-                height,
-                actual_sites,
-                step,
-                step_high,
-                radius_scale=CAND_RADIUS_SCALE,
-                radius_probes=CAND_RADIUS_PROBES,
-                inject_count=CAND_INJECT_COUNT,
-                hilbert_probes=cand_hilbert_probes if uses_hilbert else 0,
-                hilbert_window=cand_hilbert_window if uses_hilbert else 0,
-                cand_downscale=cand_downscale,
-                cand_width=cand_width,
-                cand_height=cand_height,
-            )
-        update_clear_params_buffer(device.queue, pack_params_buf, actual_sites)
-        encoder = device.create_command_encoder()
-        pack_encoder.encode(encoder, sites_buffer, packed_candidates_buffer, pack_params_buf, actual_sites)
-        hilbert_order_buf = hilbert_resources.order if uses_hilbert and hilbert_resources is not None else dummy_hilbert_buf
-        hilbert_pos_buf = hilbert_resources.pos if uses_hilbert and hilbert_resources is not None else dummy_hilbert_buf
-        for pass_idx in range(final_candidate_passes):
-            candidates_encoder.encode_update(
-                encoder,
-                packed_candidates_buffer,
-                cand_params_buffers[pass_idx],
-                cand0A,
-                cand1A,
-                cand0B,
-                cand1B,
-                hilbert_order_buf,
-                hilbert_pos_buf,
-                cand_width,
-                cand_height,
-            )
-            cand0A, cand0B = cand0B, cand0A
-            cand1A, cand1B = cand1B, cand1A
-            jump_pass_index += 1
-        device.queue.submit([encoder.finish()])
+    base = Path(args.image).stem
+    out_image = os.path.join(results_dir, f"{base}.png")
+    out_sites = os.path.join(results_dir, f"{base}_sites.txt")
 
     update_params_buffer(
         device.queue,
@@ -1861,9 +1798,9 @@ def main():
         actual_sites,
         0,
         0,
-        radius_scale=CAND_RADIUS_SCALE,
-        radius_probes=CAND_RADIUS_PROBES,
-        inject_count=CAND_INJECT_COUNT,
+        radius_scale=cand_radius_scale,
+        radius_probes=cand_radius_probes,
+        inject_count=cand_inject_count,
         hilbert_probes=cand_hilbert_probes if uses_hilbert else 0,
         hilbert_window=cand_hilbert_window if uses_hilbert else 0,
         cand_downscale=cand_downscale,

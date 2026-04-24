@@ -21,8 +21,8 @@ Both pages use the shared SAD WGSL kernels under `backends/shared/` and hyperpar
 
 ## Viewer (`index.html`)
 
-- Load a `*_sites.txt` file and set width/height to match the target image.
-- Pan/zoom, render-mode switcher, interpolation between two sites files, PNG export.
+- Load a `*_sites.txt` file with an `# Image size: W H` header.
+- Choose render mode, toggle site dots, and export PNG.
 
 ## Trainer (`train.html`)
 
@@ -56,7 +56,7 @@ The page logs `BENCH_RESULT` with final PSNR, active sites, training time, and t
 - `src/encoders.js` - one class per GPU kernel.
 - `src/buffers.js` - site/Adam/grad/stats/pairs buffer factories.
 - `src/textures.js` - target / mask / candidate texture helpers + image upload.
-- `src/io.js` - sites `.txt` / `.json` parsing + serialization + PNG download.
+- `src/io.js` - sites `.txt` parsing + serialization + PNG download.
 - `src/trainer.js` - training loop, site simulation, target-bpp planning, and epilogue.
 
 ## Shader Source

@@ -84,10 +84,6 @@ func renderVoronoiFromSites(_ options: RenderOptions) {
         saveTexture(result.render, path: imgPath)
         print("Saved: \(imgPath)")
 
-        let centroidsPath = base + "_centroids.png"
-        saveTexture(result.centroids, path: centroidsPath)
-        print("Saved: \(centroidsPath)")
-
         if let vPath = options.outputVoronoiPath, let voronoi = result.voronoi {
             saveTexture(voronoi, path: vPath)
             print("Saved: \(vPath)")
@@ -129,11 +125,9 @@ func renderVoronoiFromSites(_ options: RenderOptions) {
     renderDesc.storageMode = .shared
     let renderTexture = device.makeTexture(descriptor: renderDesc)!
     let voronoiTexture = device.makeTexture(descriptor: renderDesc)!
-    let centroidsTexture = device.makeTexture(descriptor: renderDesc)!
 
     let scale = Float(max(width, height))
     let invScaleSq = 1.0 as Float / (scale * scale)
-    let centroidRadius: Float = 2.0
 
     guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
@@ -181,7 +175,7 @@ func renderVoronoiFromSites(_ options: RenderOptions) {
         var passIndex: UInt32 = 0
         for round in 0..<rounds {
             if options.useJFA, let jfa = jfaEncoder {
-                jfa.encodeJFA(cand0: candidates.cand0A, cand1: candidates.cand0B,
+                jfa.encodeJFA(cand0: candidates.cand0A, cand1: candidates.cand1A,
                               sitesBuffer: sitesBuffer, siteCount: nSitesU,
                               invScaleSq: invScaleSq,
                               candDownscale: UInt32(max(1, options.candDownscale)),
@@ -217,10 +211,6 @@ func renderVoronoiFromSites(_ options: RenderOptions) {
                                sitesBuffer: sitesBuffer, invScaleSq: invScaleSq, siteCount: nSitesU,
                                in: renderBuffer)
 
-    renderEncoder.encodeCentroids(cand0: candidates.cand0A, cand1: candidates.cand1A, output: centroidsTexture,
-                                  sitesBuffer: sitesBuffer, dotRadius: centroidRadius, siteCount: nSitesU,
-                                  in: renderBuffer)
-
     if options.outputVoronoiPath != nil {
         renderEncoder.encodeColoring(cand0: candidates.cand0A, cand1: candidates.cand1A, output: voronoiTexture,
                                      sitesBuffer: sitesBuffer, invScaleSq: invScaleSq, siteCount: nSitesU,
@@ -250,10 +240,6 @@ func renderVoronoiFromSites(_ options: RenderOptions) {
     let imgPath = options.outputPath ?? (base + "_render.png")
     saveTexture(renderTexture, path: imgPath)
     print("Saved: \(imgPath)")
-
-    let centroidsPath = base + "_centroids.png"
-    saveTexture(centroidsTexture, path: centroidsPath)
-    print("Saved: \(centroidsPath)")
 
     if let vPath = options.outputVoronoiPath {
         saveTexture(voronoiTexture, path: vPath)

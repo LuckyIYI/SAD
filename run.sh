@@ -55,11 +55,11 @@ print_usage() {
     cat <<'EOF'
 Usage:
   ./run.sh <image.png> [--backend auto|metal|cuda|wgpu|pytorch] [backend options]
-  ./run.sh --render <sites.txt|sites.json> --backend <metal|cuda|wgpu|pytorch> [render options]
+  ./run.sh --render <sites.txt> --backend <metal|cuda|wgpu|pytorch> [render options]
 
 Defaults:
   Uses training_config.json from the repo root.
-  If no image is passed, uses test.png.
+  If no image is passed, uses test.png only when it exists at the repo root.
   Native backends are built automatically when source files changed.
   Missing Python backend dependencies are installed automatically unless SAD_NO_AUTO_INSTALL=1.
 EOF

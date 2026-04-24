@@ -1715,7 +1715,10 @@ static inline uint32_t jumpStepForIndex(uint32_t stepIndex, int width, int heigh
         tmp >>= 1;
         stages += 1;
     }
-    uint32_t stage = (stages > 0) ? (stepIndex >= stages ? (stages - 1) : stepIndex) : 0;
+    uint32_t stage = 0;
+    if (stages > 0) {
+        stage = stepIndex >= stages ? (stages - 1) : stepIndex;
+    }
     uint32_t step = pow2 >> (stage + 1);
     return std::max(step, 1u);
 }

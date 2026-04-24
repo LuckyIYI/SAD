@@ -3,11 +3,11 @@
 // (mask, init-sites, densify/prune/lr…) in the collapsible left panel, and a
 // side-by-side target vs reconstruction view, both aspect-fit.
 
-import { loadShaders } from "./src/shader_loader.js?v=viewer-sync-20260423i";
-import { Trainer, buildArgs } from "./src/trainer.js?v=viewer-sync-20260423i";
-import { loadImageToFloat32, loadMaskRgba32Float, whiteMaskRgba32Float } from "./src/textures.js?v=viewer-sync-20260423i";
-import { loadSitesFromFile, serializeSitesTxt, triggerDownload, floatImageToRgba8 } from "./src/io.js?v=viewer-sync-20260423i";
-import { SITE_FLOATS } from "./src/params.js?v=viewer-sync-20260423i";
+import { loadShaders } from "./src/shader_loader.js?v=viewer-sync-20260423j";
+import { Trainer, buildArgs } from "./src/trainer.js?v=viewer-sync-20260423j";
+import { loadImageToFloat32, loadMaskRgba32Float, whiteMaskRgba32Float } from "./src/textures.js?v=viewer-sync-20260423j";
+import { loadSitesFromFile, serializeSitesTxt, triggerDownload, floatImageToRgba8 } from "./src/io.js?v=viewer-sync-20260423j";
+import { SITE_FLOATS } from "./src/params.js?v=viewer-sync-20260423j";
 
 const CONFIG_URL = "../../training_config.json";
 const DEMO_MAX_IMAGE_SIDE = 2048;

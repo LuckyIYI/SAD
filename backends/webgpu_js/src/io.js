@@ -1,6 +1,6 @@
-// Sites .txt / .json parsing + serialization. PNG download helper.
+// Sites .txt parsing + serialization. PNG download helper.
 // Direct port of the corresponding functions in backends/webgpu_py/train_wgpu.py:
-// load_sites_txt, load_sites_json, write_sites_txt.
+// load_sites_txt, write_sites_txt.
 
 import { SITE_FLOATS } from "./params.js";
 
@@ -52,40 +52,8 @@ export function parseSitesTxt(text) {
   return { data, width, height, count: rows.length };
 }
 
-export function parseSitesJson(text) {
-  const obj = JSON.parse(text);
-  const width = obj.image_width ?? null;
-  const height = obj.image_height ?? null;
-  const sites = obj.sites ?? [];
-  if (sites.length === 0) throw new Error("No sites found in JSON input");
-  const data = new Float32Array(sites.length * SITE_FLOATS);
-  for (let i = 0; i < sites.length; i += 1) {
-    const s = sites[i];
-    const pos = s.pos ?? [0, 0];
-    const color = s.color ?? [0, 0, 0];
-    const dir = s.aniso_dir ?? [1, 0];
-    const logTau = Number(s.log_tau ?? 0);
-    const radius = Number(s.radius ?? s.radius_sq ?? 0);
-    const logAniso = Number(s.log_aniso ?? 0);
-    const base = i * SITE_FLOATS;
-    data[base + 0] = pos[0];
-    data[base + 1] = pos[1];
-    data[base + 2] = logTau;
-    data[base + 3] = radius;
-    data[base + 4] = color[0];
-    data[base + 5] = color[1];
-    data[base + 6] = color[2];
-    data[base + 7] = dir[0];
-    data[base + 8] = dir[1];
-    data[base + 9] = logAniso;
-  }
-  return { data, width, height, count: sites.length };
-}
-
 export async function loadSitesFromFile(file) {
   const text = await file.text();
-  const name = (file.name || "").toLowerCase();
-  if (name.endsWith(".json")) return parseSitesJson(text);
   return parseSitesTxt(text);
 }
 

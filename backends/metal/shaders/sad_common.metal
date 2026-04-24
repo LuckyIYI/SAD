@@ -301,15 +301,13 @@ inline void insertClosest8(
         if (bestIdx[i] == candIdx) return;
     }
 
-    float d2;
-    // Inactive sites get INFINITY distance so they're naturally evicted
     if (sites[candIdx].position.x < 0.0f) {
-        d2 = INFINITY;
-    } else {
-        float dMix2 = voronoi_dmix2(sites[candIdx], uv, inv_scale_sq);
-        float tau = max(exp(sites[candIdx].log_tau), 1e-4f);
-        d2 = tau * dMix2;
+        return;
     }
+    VoronoiSite site = sites[candIdx];
+    float dMix2 = voronoi_dmix2(site, uv, inv_scale_sq);
+    float tau = max(exp(site.log_tau), 1e-4f);
+    float d2 = tau * dMix2;
 
     insertSorted8(bestIdx, bestD2, candIdx, d2);
 }
@@ -505,8 +503,9 @@ inline void insertClosest4(
     // Skip inactive sites
     if (sites[candIdx].position.x < 0.0f) return;
 
-    float dMix2 = voronoi_dmix2(sites[candIdx], uv, inv_scale_sq);
-    float tau = max(exp(sites[candIdx].log_tau), 1e-4f);
+    VoronoiSite site = sites[candIdx];
+    float dMix2 = voronoi_dmix2(site, uv, inv_scale_sq);
+    float tau = max(exp(site.log_tau), 1e-4f);
     float d2 = tau * dMix2;
 
     insertSorted4(bestIdx, bestD2, candIdx, d2);

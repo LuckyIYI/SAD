@@ -1,9 +1,14 @@
 import Foundation
 import Metal
 
-private func initSitesFromFile(path: String, targetWidth: Int, targetHeight: Int,
-                               initLogTau: Float) -> [VoronoiSite] {
-    let loaded = loadSitesFromJSON(path: path)
+private func initSitesFromFile(path: String, targetWidth: Int, targetHeight: Int) -> [VoronoiSite] {
+    let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+    let loaded = ext == "json"
+        ? loadSitesFromJSON(path: path)
+        : {
+            let txt = loadSitesFromTXT(path: path)
+            return (sites: txt.sites, width: txt.width ?? targetWidth, height: txt.height ?? targetHeight)
+        }()
     let loadedSites = loaded.sites
 
     let sites: [VoronoiSite]
@@ -22,13 +27,7 @@ private func initSitesFromFile(path: String, targetWidth: Int, targetHeight: Int
         sites = loadedSites
     }
 
-    let refreshedSites = sites.map { site in
-        var refreshed = site
-        refreshed.log_tau = initLogTau
-        return refreshed
-    }
-
-    return refreshedSites
+    return sites
 }
 
 private func initSitesGradientWeighted(options: TrainingOptions, target: TargetImage,
@@ -107,8 +106,7 @@ func initializeSites(options: TrainingOptions, target: TargetImage,
     case .fromSites(let path):
         return initSitesFromFile(path: path,
                                  targetWidth: target.width,
-                                 targetHeight: target.height,
-                                 initLogTau: options.initLogTau)
+                                 targetHeight: target.height)
     case .perPixel:
         return initSitesPerPixel(options: options, target: target)
     case .gradientWeighted:

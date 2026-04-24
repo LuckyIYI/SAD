@@ -778,40 +778,7 @@ export class Trainer {
       this.activeEstimate = postActive;
     }
 
-    // Final candidate refresh + render, mirroring the epilogue in train_wgpu.main.
     const queue2 = device.queue;
-    const finalPasses = this.candUpdatePasses;
-
-    if (finalPasses > 0) {
-      if (this.usesHilbert) {
-        const encoder = device.createCommandEncoder();
-        // Force refresh by clearing cache.
-        this.hilbertReady = false;
-        this._maybeRefreshHilbert(encoder, this.actualSites);
-        device.queue.submit([encoder.finish()]);
-      }
-      for (let p = 0; p < finalPasses; p += 1) {
-        const stepIndex = this.jumpPassIndex + p;
-        const step = packJumpStep(stepIndex, this.candWidth, this.candHeight);
-        const seed = (stepIndex >>> 16) & 0xffff;
-        updateParamsBuffer(queue2, this.candParams[p], this._paramsArgs(this.actualSites, step, seed));
-      }
-      updateCountParamsBuffer(queue2, this.packParams, this.actualSites);
-      const encoder = device.createCommandEncoder();
-      this.packEnc.encode(encoder, this.sitesBuf, this.packedSitesBuf, this.packParams, this.actualSites);
-      for (let p = 0; p < finalPasses; p += 1) {
-        this.candsEnc.encodeUpdate(encoder,
-          this.packedSitesBuf, this.candParams[p],
-          this.cand0A, this.cand1A, this.cand0B, this.cand1B,
-          this._hilbertOrderBuf(), this._hilbertPosBuf(),
-          this.candWidth, this.candHeight);
-        [this.cand0A, this.cand0B] = [this.cand0B, this.cand0A];
-        [this.cand1A, this.cand1B] = [this.cand1B, this.cand1A];
-        this.jumpPassIndex += 1;
-      }
-      device.queue.submit([encoder.finish()]);
-    }
-
     updateParamsBuffer(queue2, this.renderParams, this._paramsArgs(this.actualSites, 0, 0));
     const encoder = device.createCommandEncoder();
     this.renderEnc.encode(encoder, this.sitesBuf, this.renderParams,
