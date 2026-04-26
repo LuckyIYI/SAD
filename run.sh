@@ -71,7 +71,7 @@ if [ ${#args[@]} -eq 1 ] && { [ "${args[0]}" = "--help" ] || [ "${args[0]}" = "-
 fi
 
 help_requested=false
-for arg in "${args[@]}"; do
+for arg in ${args[@]+"${args[@]}"}; do
     if [ "$arg" = "--help" ] || [ "$arg" = "-h" ]; then
         help_requested=true
         break
@@ -252,7 +252,7 @@ if [ ${#args[@]} -eq 0 ] || [[ "${args[0]}" == --* ]]; then
         exit 1
     fi
     input_path="$DEFAULT_IMAGE"
-    extra=("${args[@]}")
+    extra=(${args[@]+"${args[@]}"})
 else
     input_path="${args[0]}"
     extra=("${args[@]:1}")
@@ -314,10 +314,10 @@ run_single() {
     set +e
     if [ -n "$batch_log" ]; then
         temp_output="$(mktemp)"
-        run_backend "$img" "${extra[@]}" 2>&1 | tee "$temp_output"
+        run_backend "$img" ${extra[@]+"${extra[@]}"} 2>&1 | tee "$temp_output"
         exit_code=${PIPESTATUS[0]}
     else
-        run_backend "$img" "${extra[@]}"
+        run_backend "$img" ${extra[@]+"${extra[@]}"}
         exit_code=$?
     fi
     set -e
